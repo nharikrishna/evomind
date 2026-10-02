@@ -192,6 +192,11 @@ label.inline { display: flex; align-items: center; gap: 6px; color: var(--text-2
   gap: 12px;
 }
 @media (max-width: 720px) { .charts { grid-template-columns: minmax(0, 1fr); } }
+.charts.four { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+@media (max-width: 1200px) { .charts.four { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 720px) { .charts.four { grid-template-columns: minmax(0, 1fr); } }
+.body-section { display: flex; flex-direction: column; gap: 10px; }
+.muted-inline { text-transform: none; letter-spacing: 0; font-weight: 400; }
 
 .chart {
   background: var(--surface);
@@ -289,6 +294,10 @@ dl.kv dd { margin: 0; text-align: right; font-variant-numeric: tabular-nums; }
 .settings { display: grid; grid-template-columns: 1fr 96px; gap: 6px 10px; align-items: center; font-size: 13px; }
 .settings label { color: var(--text-2); }
 .settings input { width: 100%; padding: 4px 6px; }
+.settings input.check { width: 16px; height: 16px; justify-self: end; accent-color: var(--accent); }
+.body-box { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border); }
+.body-box .ancestry-title { font-size: 12px; margin-bottom: 4px; color: var(--muted); }
+.section-title { font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); margin: 4px 0 -4px; }
 .settings .section { grid-column: 1 / -1; color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; margin-top: 6px; }
 .settings .actions { grid-column: 1 / -1; display: flex; gap: 6px; margin-top: 8px; }
 .settings .actions button { flex: 1; }

@@ -1,6 +1,8 @@
 import type { Controller } from "../sim/controllers";
 import type { ControllerFactory } from "../sim/world";
-import type { Action } from "../sim/types";
+import type { Action, Creature } from "../sim/types";
+import type { SimConfig } from "../sim/config";
+import { bodyFromGenes } from "../sim/body";
 import type { Genome } from "./genome";
 import { Brain } from "./mlp";
 
@@ -23,12 +25,18 @@ export class NeuralController implements Controller {
   }
 }
 
-/** Controller factory that gives creature i the brain encoded by genomes[i]. */
+/** Bind a genome to a creature: record its id and grow its evolved body (if any). */
+export function attachGenome(creature: Creature, g: Genome, config: SimConfig): void {
+  creature.genomeId = g.id;
+  if (g.genes.body) creature.body = bodyFromGenes(g.genes.body, config);
+}
+
+/** Controller factory that gives creature i the brain and body encoded by genomes[i]. */
 export function neuralFactory(genomes: readonly Genome[]): ControllerFactory {
-  return (creature, index) => {
+  return (creature, index, _rng, config) => {
     const g = genomes[index];
     if (!g) throw new Error(`No genome for creature ${index}`);
-    creature.genomeId = g.id;
+    attachGenome(creature, g, config);
     return new NeuralController(g);
   };
 }

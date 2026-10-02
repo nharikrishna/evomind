@@ -3,10 +3,11 @@ import { DEFAULT_CONFIG, type SimConfig } from "../sim/config";
 interface Field {
   key: keyof SimConfig;
   label: string;
-  step: number;
-  min: number;
+  step?: number;
+  min?: number;
   max?: number;
   int?: boolean;
+  bool?: boolean;
 }
 
 const SECTIONS: [string, Field[]][] = [
@@ -19,10 +20,15 @@ const SECTIONS: [string, Field[]][] = [
     { key: "episodeTicks", label: "Ticks per generation", step: 250, min: 100, int: true },
   ]],
   ["Body", [
-    { key: "maxSpeed", label: "Max speed", step: 0.25, min: 0.1 },
+    { key: "evolveBodies", label: "Evolve bodies", bool: true },
+    { key: "energyWeight", label: "Energy cost in fitness", step: 0.25, min: 0 },
+    { key: "costSpeed", label: "Speed upkeep (× speed³)", step: 0.005, min: 0 },
+    { key: "costSensor", label: "Sensor upkeep", step: 0.002, min: 0 },
+    { key: "costSize", label: "Size upkeep (× size²)", step: 0.002, min: 0 },
+    { key: "costTurn", label: "Turn upkeep", step: 0.001, min: 0 },
     { key: "moveCost", label: "Move cost (× speed²)", step: 0.005, min: 0 },
-    { key: "basalCost", label: "Basal cost / tick", step: 0.01, min: 0 },
-    { key: "sensorRange", label: "Sensor range", step: 10, min: 10 },
+    { key: "maxSpeed", label: "Default max speed", step: 0.25, min: 0.1 },
+    { key: "sensorRange", label: "Default sensor range", step: 10, min: 10 },
   ]],
   ["Evolution", [
     { key: "eliteCount", label: "Elites kept", step: 1, min: 0, int: true },
@@ -38,7 +44,7 @@ const SECTIONS: [string, Field[]][] = [
 export class SettingsForm {
   private inputs = new Map<keyof SimConfig, HTMLInputElement>();
 
-  constructor(form: HTMLFormElement, private onApply: (cfg: SimConfig) => void) {
+  constructor(form: HTMLFormElement, private onApply: (cfg: SimConfig) => void, private defaults: SimConfig = DEFAULT_CONFIG) {
     for (const [title, fields] of SECTIONS) {
       const sec = document.createElement("div");
       sec.className = "section";
@@ -50,11 +56,16 @@ export class SettingsForm {
         label.htmlFor = id;
         label.textContent = f.label;
         const input = document.createElement("input");
-        input.type = "number";
         input.id = id;
-        input.step = String(f.step);
-        input.min = String(f.min);
-        if (f.max !== undefined) input.max = String(f.max);
+        if (f.bool) {
+          input.type = "checkbox";
+          input.className = "check";
+        } else {
+          input.type = "number";
+          input.step = String(f.step ?? 1);
+          if (f.min !== undefined) input.min = String(f.min);
+          if (f.max !== undefined) input.max = String(f.max);
+        }
         form.append(label, input);
         this.inputs.set(f.key, input);
       }
@@ -65,13 +76,13 @@ export class SettingsForm {
     apply.type = "submit";
     apply.className = "primary";
     apply.textContent = "Apply & restart";
-    const defaults = document.createElement("button");
-    defaults.type = "button";
-    defaults.textContent = "Defaults";
-    actions.append(apply, defaults);
+    const reset = document.createElement("button");
+    reset.type = "button";
+    reset.textContent = "Defaults";
+    actions.append(apply, reset);
     form.append(actions);
 
-    defaults.addEventListener("click", () => this.load(DEFAULT_CONFIG));
+    reset.addEventListener("click", () => this.load(this.defaults));
     form.addEventListener("submit", (e) => {
       e.preventDefault();
       if (!form.reportValidity()) return;
@@ -84,14 +95,22 @@ export class SettingsForm {
   /** Show a config's values in the form (e.g. after loading a run). */
   load(cfg: SimConfig): void {
     this.base = cfg;
-    for (const [key, input] of this.inputs) input.value = String(cfg[key]);
+    for (const [key, input] of this.inputs) {
+      if (input.type === "checkbox") input.checked = Boolean(cfg[key]);
+      else input.value = String(cfg[key]);
+    }
   }
 
   private read(): SimConfig {
     const cfg = { ...this.base };
     for (const [, fields] of SECTIONS) {
       for (const f of fields) {
-        const v = Number(this.inputs.get(f.key)!.value);
+        const input = this.inputs.get(f.key)!;
+        if (f.bool) {
+          (cfg[f.key] as boolean) = input.checked;
+          continue;
+        }
+        const v = Number(input.value);
         (cfg[f.key] as number) = f.int ? Math.round(v) : v;
       }
     }

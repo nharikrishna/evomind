@@ -13,6 +13,7 @@ import { rankByFitness, tournament } from "./selection";
 import { mutate } from "./mutation";
 import { uniformCrossover } from "./crossover";
 import { genomeFromJSON, genomeToJSON } from "../analysis/history";
+import { traitStats } from "../analysis/metrics";
 
 /** Seed of the world for (run seed, generation, episode): new food layout every time. */
 export function episodeSeed(runSeed: number, generation: number, episode: number): number {
@@ -176,6 +177,7 @@ export class Evolution {
       ...summary,
       bestEver: this.bestEver,
       diversity: meanPairwiseDistance(this.population),
+      ...traitStats(this.population, this.config),
       ...metrics,
     };
     this.history.push(stats);
@@ -194,22 +196,26 @@ export class Evolution {
     for (let k = 0; k < Math.min(cfg.eliteCount, n); k++) next.push(this.population[ranked[k]]);
 
     const params = { rate: cfg.mutationRate, sigma: cfg.mutationSigma, resetRate: cfg.resetRate };
+    const bodyParams = { rate: cfg.bodyMutationRate, sigma: cfg.bodyMutationSigma, resetRate: 0 };
     while (next.length < n) {
       const parent = this.population[tournament(fitness, cfg.tournamentSize, this.rng)];
       let weights: Float32Array;
+      let body: Float32Array | undefined = parent.genes.body ? new Float32Array(parent.genes.body) : undefined;
       if (cfg.crossoverRate > 0 && this.rng.next() < cfg.crossoverRate) {
         const other = this.population[tournament(fitness, cfg.tournamentSize, this.rng)];
         weights = uniformCrossover(parent.genes.brain, other.genes.brain, this.rng);
+        if (body && other.genes.body) body = uniformCrossover(body, other.genes.body, this.rng);
       } else {
         weights = new Float32Array(parent.genes.brain);
       }
       mutate(weights, params, this.rng);
+      if (body) mutate(body, bodyParams, this.rng);
       const child: Genome = {
         id: this.ids.take(),
         parentId: parent.id,
         generation: this.generation + 1,
         shape: parent.shape,
-        genes: { brain: weights },
+        genes: body ? { brain: weights, body } : { brain: weights },
       };
       this.lineage.set(child.id, { parentId: parent.id, generation: child.generation });
       next.push(child);

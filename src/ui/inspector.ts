@@ -29,6 +29,21 @@ export function renderInspector(host: HTMLElement, s: SelectedSnap | null): void
   for (const [k, v] of rows) dl.append(el("dt", undefined, k), el("dd", undefined, v));
   const parts: HTMLElement[] = [dl];
 
+  const b = s.body;
+  const box = el("div", "body-box");
+  box.append(el("div", "ancestry-title", b.evolved ? "Body (evolved)" : "Body (fixed default)"));
+  const bdl = el("dl", "kv");
+  const brows: [string, string][] = [
+    ["Max speed", b.maxSpeed.toFixed(2)],
+    ["Sensor range", `${b.sensorRange.toFixed(0)} px`],
+    ["Size", `${b.size.toFixed(2)}×`],
+    ["Turn rate", `${((b.turnRate * 180) / Math.PI).toFixed(1)}°/tick`],
+    ["Upkeep", `${b.basal.toFixed(3)} /tick`],
+  ];
+  for (const [k, v] of brows) bdl.append(el("dt", undefined, k), el("dd", undefined, v));
+  box.append(bdl);
+  parts.push(box);
+
   if (s.genome) {
     const box = el("div", "ancestry");
     box.append(el("div", "ancestry-title", "Ancestry (newest → oldest)"));
@@ -50,7 +65,7 @@ export function renderInspector(host: HTMLElement, s: SelectedSnap | null): void
 
   if (s.relatives > 0) {
     const r = el("div", "relatives");
-    r.append(el("i"), document.createTextNode(`${s.relatives} relatives in the world (same great-grandparent)`));
+    r.append(el("i"), document.createTextNode(`${s.relatives} ${s.relatives === 1 ? "relative" : "relatives"} in the world (same great-grandparent)`));
     parts.push(r);
   }
   host.replaceChildren(...parts);

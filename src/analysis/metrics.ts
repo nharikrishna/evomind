@@ -1,4 +1,7 @@
 import type { Creature } from "../sim/types";
+import type { SimConfig } from "../sim/config";
+import type { Genome } from "../brain/genome";
+import { bodyFromGenes, defaultBody } from "../sim/body";
 
 /** Behavioral summary of one episode's population. */
 export interface EpisodeMetrics {
@@ -35,7 +38,7 @@ export function episodeMetrics(creatures: readonly Creature[]): EpisodeMetrics {
 }
 
 /** Per-generation record: fitness stats plus behavior. */
-export interface GenerationStats extends EpisodeMetrics {
+export interface GenerationStats extends EpisodeMetrics, TraitStats {
   generation: number;
   best: number;
   mean: number;
@@ -43,6 +46,29 @@ export interface GenerationStats extends EpisodeMetrics {
   bestEver: number;
   /** Mean pairwise distance between brains; collapse toward 0 = everyone is a clone. */
   diversity: number;
+}
+
+/** Population mean and standard deviation of each body trait. */
+export interface TraitStats {
+  maxSpeedMean: number; maxSpeedSd: number;
+  sensorRangeMean: number; sensorRangeSd: number;
+  sizeMean: number; sizeSd: number;
+  turnRateMean: number; turnRateSd: number;
+}
+
+export function traitStats(genomes: readonly Genome[], cfg: SimConfig): TraitStats {
+  const bodies = genomes.map((g) => (g.genes.body ? bodyFromGenes(g.genes.body, cfg) : defaultBody(cfg)));
+  const ms = (key: "maxSpeed" | "sensorRange" | "size" | "turnRate") => {
+    const v = bodies.map((b) => b[key]);
+    const mean = v.reduce((s, x) => s + x, 0) / v.length;
+    const sd = Math.sqrt(v.reduce((s, x) => s + (x - mean) ** 2, 0) / v.length);
+    return [mean, sd];
+  };
+  const [maxSpeedMean, maxSpeedSd] = ms("maxSpeed");
+  const [sensorRangeMean, sensorRangeSd] = ms("sensorRange");
+  const [sizeMean, sizeSd] = ms("size");
+  const [turnRateMean, turnRateSd] = ms("turnRate");
+  return { maxSpeedMean, maxSpeedSd, sensorRangeMean, sensorRangeSd, sizeMean, sizeSd, turnRateMean, turnRateSd };
 }
 
 /** Average a list of metric records field by field. */

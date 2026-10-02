@@ -9,6 +9,7 @@ import type { Controller } from "../src/sim/controllers";
 import type { Creature } from "../src/sim/types";
 import { randomPopulation } from "../src/brain/population";
 import { neuralFactory } from "../src/brain/neuralController";
+import { defaultBody } from "../src/sim/body";
 
 describe("rng", () => {
   it("is deterministic per seed", () => {
@@ -85,6 +86,7 @@ describe("sensors", () => {
   const creature = (heading: number): Creature => ({
     id: 0, speciesId: "prey", x: 10, y: 300, heading, speed: 0,
     energy: 50, alive: true, foodEaten: 0, age: 0, genomeId: null,
+    body: defaultBody(cfg),
     distanceTraveled: 0, energySpent: 0, alignmentSum: 0, alignmentTicks: 0, ticksTowardFood: 0,
   });
 

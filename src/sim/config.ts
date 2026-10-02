@@ -49,6 +49,24 @@ export interface SimConfig {
   crossoverRate: number;
   /** fitness = foodEaten + survivalBonus * ticksAlive (0 = pure food). */
   survivalBonus: number;
+  /**
+   * Weight of energy spent in fitness, measured in food-equivalents:
+   * fitness -= energyWeight * energySpent / foodEnergy. 0 = food only, 1 = net energy surplus.
+   */
+  energyWeight: number;
+
+  // Evolvable bodies (Phase 4.5)
+  /** Off = every creature has the fixed default body (the Phase 1-4 lab setup). */
+  evolveBodies: boolean;
+  /** Per-tick basal cost terms; at default traits they sum to basalCost. */
+  costSize: number;
+  costSensor: number;
+  costSpeed: number;
+  costTurn: number;
+  /** Spread of generation-0 body genes around the default body (gene space). */
+  bodyInitSigma: number;
+  bodyMutationRate: number;
+  bodyMutationSigma: number;
 }
 
 export const DEFAULT_CONFIG: SimConfig = {
@@ -84,8 +102,26 @@ export const DEFAULT_CONFIG: SimConfig = {
   resetRate: 0.002,
   crossoverRate: 0,
   survivalBonus: 0,
+  energyWeight: 0,
+
+  evolveBodies: false,
+  // Sum = basalCost (0.05), so the default body costs exactly what pre-4.5 creatures paid.
+  // Tuned headlessly: speed upkeep (cubic) dominates; traits settle inside their ranges.
+  costSize: 0.01,
+  costSensor: 0.008,
+  costSpeed: 0.03,
+  costTurn: 0.002,
+  bodyInitSigma: 0.5,
+  bodyMutationRate: 0.2,
+  bodyMutationSigma: 0.15,
 };
 
 export function makeConfig(overrides: Partial<SimConfig> = {}): SimConfig {
   return { ...DEFAULT_CONFIG, ...overrides };
 }
+
+/**
+ * Body evolution setup: evolvable bodies, and fitness = net energy surplus so
+ * that the energy cost of a body actually matters to selection.
+ */
+export const BODIES_PRESET: Partial<SimConfig> = { evolveBodies: true, energyWeight: 1 };

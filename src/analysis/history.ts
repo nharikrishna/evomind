@@ -4,6 +4,8 @@ import type { Genome } from "../brain/genome";
 const COLUMNS: (keyof GenerationStats)[] = [
   "generation", "best", "mean", "median", "bestEver",
   "alignment", "towardFood", "meanFood", "meanLifespan", "survivors", "meanSpeed", "diversity",
+  "maxSpeedMean", "maxSpeedSd", "sensorRangeMean", "sensorRangeSd",
+  "sizeMean", "sizeSd", "turnRateMean", "turnRateSd",
 ];
 
 export function historyToCSV(history: readonly GenerationStats[]): string {
@@ -15,9 +17,13 @@ export function historyToCSV(history: readonly GenerationStats[]): string {
 
 /** Plain-JSON form of a genome (Float32Array -> number[]). */
 export function genomeToJSON(g: Genome): object {
-  return { ...g, genes: { brain: Array.from(g.genes.brain) } };
+  const genes: Record<string, number[]> = { brain: Array.from(g.genes.brain) };
+  if (g.genes.body) genes.body = Array.from(g.genes.body);
+  return { ...g, genes };
 }
 
 export function genomeFromJSON(o: any): Genome {
-  return { ...o, genes: { brain: Float32Array.from(o.genes.brain) } };
+  const genes: Genome["genes"] = { brain: Float32Array.from(o.genes.brain) };
+  if (o.genes.body) genes.body = Float32Array.from(o.genes.body);
+  return { ...o, genes };
 }

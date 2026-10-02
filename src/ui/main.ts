@@ -1,4 +1,4 @@
-import { DEFAULT_CONFIG, type SimConfig } from "../sim/config";
+import { BODIES_PRESET, DEFAULT_CONFIG, type SimConfig } from "../sim/config";
 import type { GenerationStats } from "../analysis/metrics";
 import { historyToCSV } from "../analysis/history";
 import type { FromWorker, SceneKind, ToWorker } from "../worker/protocol";
@@ -16,7 +16,9 @@ const SERIES_2 = "#d95926";
 
 // ---------- state ----------
 
-let config: SimConfig = { ...DEFAULT_CONFIG };
+/** The app starts with bodies evolving; the lab setup is one checkbox away in Settings. */
+const APP_DEFAULTS: SimConfig = { ...DEFAULT_CONFIG, ...BODIES_PRESET };
+let config: SimConfig = { ...APP_DEFAULTS };
 let history: GenerationStats[] = [];
 let generation = 0;
 let scene: SceneKind = "evolve";
@@ -75,13 +77,43 @@ const charts = [
     series: [{ key: "diversity", label: "Diversity", color: SERIES_1 }],
     format: fmt1,
   }),
+  // Body traits: y-axes span each trait's full allowed range so drift toward a limit is visible.
+  new LineChart($("c-speed"), {
+    title: "Max speed",
+    subtitle: "px/tick",
+    series: [{ key: "maxSpeedMean", sdKey: "maxSpeedSd", label: "Max speed", color: SERIES_1 }],
+    format: (v) => v.toFixed(1),
+    yRange: [0.5, 4],
+  }),
+  new LineChart($("c-sensor"), {
+    title: "Sensor range",
+    subtitle: "px",
+    series: [{ key: "sensorRangeMean", sdKey: "sensorRangeSd", label: "Sensor range", color: SERIES_1 }],
+    format: (v) => v.toFixed(0),
+    yRange: [50, 400],
+  }),
+  new LineChart($("c-size"), {
+    title: "Size",
+    subtitle: "× default",
+    series: [{ key: "sizeMean", sdKey: "sizeSd", label: "Size", color: SERIES_1 }],
+    format: (v) => v.toFixed(2),
+    yRange: [0.5, 2],
+  }),
+  new LineChart($("c-turn"), {
+    title: "Turn rate",
+    subtitle: "degrees/tick",
+    series: [{ key: "turnRateMean", sdKey: "turnRateSd", label: "Turn rate", color: SERIES_1 }],
+    format: (v) => v.toFixed(0),
+    scale: 180 / Math.PI,
+    yRange: [(0.05 * 180) / Math.PI, (0.4 * 180) / Math.PI],
+  }),
 ];
 
 const settings = new SettingsForm($<HTMLFormElement>("settings"), (cfg) => {
   config = cfg;
   send({ t: "reset", config: cfg });
   toast("Restarted with new settings.");
-});
+}, APP_DEFAULTS);
 settings.load(config);
 
 // ---------- stage views ----------
@@ -134,7 +166,7 @@ function drawFrame(f: Extract<FromWorker, { t: "frame" }>): void {
   f.views.forEach((snap, k) => {
     const v = views[k];
     const sel = f.selected && f.selected.view === k ? f.selected : null;
-    v.renderer.draw(snap, sel ? sel.index : null, sel ? sel.sense : null);
+    v.renderer.draw(snap, sel ? sel.index : null, sel ? sel.sense : null, sel?.body.sensorRange);
     v.label.textContent = f.scene === "evolve" ? `Generation ${f.generation}` : snap.label;
     v.meta.textContent = `tick ${snap.tick}/${snap.episodeTicks} · alive ${snap.alive}/${snap.count} · avg food ${snap.meanFood.toFixed(1)}`;
     v.overlay.hidden = !(fast && k === 0);
@@ -150,6 +182,13 @@ function drawFrame(f: Extract<FromWorker, { t: "frame" }>): void {
   renderInspector(inspectorEl, f.selected);
   if (f.selected?.brain) brainView.draw(f.selected.brain);
   else brainView.clear();
+}
+
+function updateBodySection(): void {
+  $("body-section").hidden = !config.evolveBodies;
+  charts[0].setSubtitle(
+    config.energyWeight > 0 ? "food eaten minus energy burned, in food units" : "food eaten per creature",
+  );
 }
 
 function updateTiles(): void {
@@ -217,6 +256,7 @@ worker.onmessage = (ev: MessageEvent<FromWorker>) => {
       config = m.config;
       generation = m.generation;
       settings.load(config);
+      updateBodySection();
       chartsDirty = true;
       updateTiles();
       updateStatus();
@@ -313,6 +353,7 @@ document.addEventListener("keydown", (e) => {
 });
 
 send({ t: "reset", config });
+updateBodySection();
 updateTiles();
 updateStatus();
 requestAnimationFrame(loop);

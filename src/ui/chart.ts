@@ -11,6 +11,8 @@ export interface SeriesSpec {
   key: keyof GenerationStats;
   label: string;
   color: string;
+  /** If set, a ~10% wash shows mean ± this standard deviation (population spread). */
+  sdKey?: keyof GenerationStats;
 }
 
 export interface ChartOptions {
@@ -18,8 +20,10 @@ export interface ChartOptions {
   subtitle?: string;
   series: SeriesSpec[];
   format: (v: number) => string;
-  /** Force the y-axis to include this range (e.g. [0, 1] for alignment). */
+  /** Force the y-axis to include this range, in display units (e.g. [0, 1] for alignment). */
   yRange?: [number, number];
+  /** Multiply stored values before display, e.g. radians -> degrees, so axis ticks land on round numbers. */
+  scale?: number;
 }
 
 const T = {
@@ -49,6 +53,7 @@ export class LineChart {
   private hover: number | null = null;
   private w = 0;
   private dirty = true;
+  private subEl: HTMLDivElement | null = null;
 
   constructor(host: HTMLElement, private opts: ChartOptions) {
     host.classList.add("chart");
@@ -58,11 +63,11 @@ export class LineChart {
     title.className = "chart-title";
     title.textContent = opts.title;
     head.append(title);
-    if (opts.subtitle) {
-      const sub = document.createElement("div");
-      sub.className = "chart-sub";
-      sub.textContent = opts.subtitle;
-      head.append(sub);
+    if (opts.subtitle !== undefined) {
+      this.subEl = document.createElement("div");
+      this.subEl.className = "chart-sub";
+      this.subEl.textContent = opts.subtitle;
+      head.append(this.subEl);
     }
     if (opts.series.length > 1) {
       const legend = document.createElement("div");
@@ -100,6 +105,15 @@ export class LineChart {
     });
   }
 
+  /** A stat in display units. */
+  private val(row: GenerationStats, key: keyof GenerationStats): number {
+    return row[key] * (this.opts.scale ?? 1);
+  }
+
+  setSubtitle(text: string): void {
+    if (this.subEl) this.subEl.textContent = text;
+  }
+
   setData(data: GenerationStats[]): void {
     this.data = data;
     this.dirty = true;
@@ -129,9 +143,9 @@ export class LineChart {
     let lo = this.opts.yRange ? this.opts.yRange[0] : 0;
     let hi = this.opts.yRange ? this.opts.yRange[1] : 0;
     for (const row of d) for (const s of this.opts.series) {
-      const v = row[s.key];
-      if (v < lo) lo = v;
-      if (v > hi) hi = v;
+      const sd = s.sdKey ? this.val(row, s.sdKey) : 0;
+      if (this.val(row, s.key) - sd < lo) lo = this.val(row, s.key) - sd;
+      if (this.val(row, s.key) + sd > hi) hi = this.val(row, s.key) + sd;
     }
     if (hi === lo) hi = lo + 1;
     const step = niceStep(hi - lo, 4);
@@ -176,6 +190,27 @@ export class LineChart {
       ctx.fillText(String(Math.round(g)), sx(g), HEIGHT - PAD.bottom + 6);
     }
 
+    // Spread bands (mean ± sd), drawn under the lines
+    for (const s of this.opts.series) {
+      if (!s.sdKey) continue;
+      const sdKey = s.sdKey;
+      ctx.beginPath();
+      this.data.forEach((row, i) => {
+        const x = sx(row.generation), y = sy(this.val(row, s.key) + this.val(row, sdKey));
+        if (i === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+      });
+      for (let i = this.data.length - 1; i >= 0; i--) {
+        const row = this.data[i];
+        ctx.lineTo(sx(row.generation), sy(this.val(row, s.key) - this.val(row, sdKey)));
+      }
+      ctx.closePath();
+      ctx.globalAlpha = 0.14;
+      ctx.fillStyle = s.color;
+      ctx.fill();
+      ctx.globalAlpha = 1;
+    }
+
     // Lines
     ctx.lineJoin = "round";
     ctx.lineCap = "round";
@@ -184,7 +219,7 @@ export class LineChart {
       ctx.lineWidth = 2;
       ctx.beginPath();
       this.data.forEach((row, i) => {
-        const x = sx(row.generation), y = sy(row[s.key]);
+        const x = sx(row.generation), y = sy(this.val(row, s.key));
         if (i === 0) ctx.moveTo(x, y);
         else ctx.lineTo(x, y);
       });
@@ -193,7 +228,7 @@ export class LineChart {
 
     // End dots + end labels (selective direct labels: endpoint only)
     const last = this.data[this.data.length - 1];
-    const ends = this.opts.series.map((s) => ({ s, y: sy(last[s.key]) }));
+    const ends = this.opts.series.map((s) => ({ s, y: sy(this.val(last, s.key)) }));
     // Labels too close together would collide; let the legend + tooltip carry them then.
     const collide = ends.length > 1 && Math.abs(ends[0].y - ends[1].y) < 13;
     for (const { s, y } of ends) {
@@ -202,7 +237,7 @@ export class LineChart {
         ctx.fillStyle = T.secondary;
         ctx.textAlign = "left";
         ctx.textBaseline = "middle";
-        ctx.fillText(this.opts.format(last[s.key]), sx(last.generation) + 8, y);
+        ctx.fillText(this.opts.format(this.val(last, s.key)), sx(last.generation) + 8, y);
       }
     }
 
@@ -216,7 +251,7 @@ export class LineChart {
       ctx.moveTo(x, PAD.top);
       ctx.lineTo(x, HEIGHT - PAD.bottom);
       ctx.stroke();
-      for (const s of this.opts.series) this.dot(x, sy(row[s.key]), s.color);
+      for (const s of this.opts.series) this.dot(x, sy(this.val(row, s.key)), s.color);
     }
   }
 
@@ -268,7 +303,7 @@ export class LineChart {
       const key = document.createElement("i");
       key.style.background = s.color;
       const val = document.createElement("strong");
-      val.textContent = this.opts.format(row[s.key]);
+      val.textContent = this.opts.format(this.val(row, s.key)) + (s.sdKey ? ` ± ${this.opts.format(this.val(row, s.sdKey))}` : "");
       const lab = document.createElement("span");
       lab.textContent = s.label;
       line.append(key, val, lab);

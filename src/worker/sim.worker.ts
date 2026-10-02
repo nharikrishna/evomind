@@ -12,7 +12,7 @@ import { NeuralController, neuralFactory } from "../brain/neuralController";
 import { Evolution, runToEnd, type RunFile } from "../evo/generation";
 import { genomeFromJSON } from "../analysis/history";
 import {
-  CREATURE_STRIDE, C_ALIVE, C_ENERGY, C_HEADING, C_RELATIVE, C_X, C_Y,
+  CREATURE_STRIDE, C_ALIVE, C_ENERGY, C_HEADING, C_RELATIVE, C_SIZE, C_X, C_Y,
   type FromWorker, type SceneKind, type SelectedSnap, type ToWorker, type WorldSnap,
 } from "./protocol";
 
@@ -172,6 +172,7 @@ function snapWorld(v: View, relativeOf: number | null): WorldSnap {
     creatures[o + C_ALIVE] = c.alive ? 1 : 0;
     creatures[o + C_RELATIVE] =
       relativeOf !== null && c.genomeId !== null && evo.ancestorAt(c.genomeId, RELATIVE_DEPTH) === relativeOf ? 1 : 0;
+    creatures[o + C_SIZE] = c.body.size;
     eaten += c.foodEaten;
   }
   const active = w.food.filter((f) => f.active);
@@ -233,6 +234,14 @@ function snapSelected(): { snap: SelectedSnap | null; relativeOf: number | null 
       ancestry,
       ancestryMore,
       relatives: 0,
+      body: {
+        maxSpeed: c.body.maxSpeed,
+        sensorRange: c.body.sensorRange,
+        size: c.body.size,
+        turnRate: c.body.turnRate,
+        basal: c.body.basal,
+        evolved: !!g?.genes.body,
+      },
       brain: brain && {
         shape: brain.shape,
         weights: new Float32Array(brain.weights),

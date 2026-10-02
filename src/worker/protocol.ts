@@ -12,8 +12,8 @@ import type { BrainShape } from "../brain/genome";
 export type SceneKind = "evolve" | "best" | "compare";
 
 /** Per-creature floats in WorldSnap.creatures. */
-export const CREATURE_STRIDE = 6;
-export const C_X = 0, C_Y = 1, C_HEADING = 2, C_ENERGY = 3, C_ALIVE = 4, C_RELATIVE = 5;
+export const CREATURE_STRIDE = 7;
+export const C_X = 0, C_Y = 1, C_HEADING = 2, C_ENERGY = 3, C_ALIVE = 4, C_RELATIVE = 5, C_SIZE = 6;
 
 export interface WorldSnap {
   label: string;
@@ -25,7 +25,7 @@ export interface WorldSnap {
   count: number;
   alive: number;
   meanFood: number;
-  /** count * CREATURE_STRIDE: x, y, heading, energy (0..1), alive (0/1), relative-of-selected (0/1). */
+  /** count * CREATURE_STRIDE: x, y, heading, energy (0..1), alive (0/1), relative-of-selected (0/1), body size. */
   creatures: Float32Array;
   /** Active food as x, y pairs. */
   food: Float32Array;
@@ -47,6 +47,7 @@ export interface SelectedSnap {
   ancestry: { id: number; generation: number }[];
   ancestryMore: number;
   relatives: number;
+  body: { maxSpeed: number; sensorRange: number; size: number; turnRate: number; basal: number; evolved: boolean };
   brain: {
     shape: BrainShape;
     weights: Float32Array;

@@ -1,3 +1,5 @@
+import type { Body } from "./body";
+
 export type SpeciesId = "prey" | "predator";
 
 export interface Creature {
@@ -15,6 +17,8 @@ export interface Creature {
   age: number;
   /** Genome driving this creature (null for scripted creatures). */
   genomeId: number | null;
+  /** Physical traits and their energy consequences. */
+  body: Body;
 
   // Recorded-only: these never feed back into behavior; they exist for analysis.
   distanceTraveled: number;

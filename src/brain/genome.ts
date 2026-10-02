@@ -25,6 +25,8 @@ export interface Genome {
   shape: BrainShape;
   genes: {
     brain: Float32Array;
+    /** Body trait genes (see body.ts); absent when bodies don't evolve. */
+    body?: Float32Array;
   };
 }
 

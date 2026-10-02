@@ -4,7 +4,7 @@ import type { Action } from "../sim/types";
 import { deriveSeed } from "../sim/rng";
 import { PREY_SENSORS } from "../sim/sensors";
 import type { Genome } from "../brain/genome";
-import { NeuralController } from "../brain/neuralController";
+import { attachGenome, NeuralController } from "../brain/neuralController";
 import { randomPopulation } from "../brain/population";
 import { runEpisode } from "../evo/generation";
 import { preyFitness } from "../evo/fitness";
@@ -33,6 +33,8 @@ export class AblatedController implements Controller {
 
 export interface EvalResult {
   meanFitness: number;
+  /** Mean food eaten per creature (independent of the fitness formula). */
+  meanFood: number;
   alignment: number;
 }
 
@@ -47,18 +49,19 @@ export function evaluate(
   blind: readonly SensorName[] = [],
 ): EvalResult {
   const zeroed = blind.map((s) => PREY_SENSORS.indexOf(s));
-  let fit = 0, align = 0;
+  let fit = 0, food = 0, align = 0;
   for (let e = 0; e < episodes; e++) {
     const seed = deriveSeed(config.seed, 0x7e57, e);
-    const world = runEpisode(config, genomes, seed, (creature, i) => {
-      creature.genomeId = genomes[i].id;
+    const world = runEpisode(config, genomes, seed, (creature, i, _rng, cfg) => {
+      attachGenome(creature, genomes[i], cfg);
       const nc = new NeuralController(genomes[i]);
       return zeroed.length ? new AblatedController(nc, zeroed) : nc;
     });
     fit += world.creatures.reduce((s, c) => s + preyFitness(c, config), 0) / genomes.length;
+    food += world.creatures.reduce((s, c) => s + c.foodEaten, 0) / genomes.length;
     align += episodeMetrics(world.creatures).alignment;
   }
-  return { meanFitness: fit / episodes, alignment: align / episodes };
+  return { meanFitness: fit / episodes, meanFood: food / episodes, alignment: align / episodes };
 }
 
 export interface ProofReport {

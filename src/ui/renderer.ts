@@ -1,5 +1,5 @@
 import {
-  CREATURE_STRIDE, C_ALIVE, C_ENERGY, C_HEADING, C_RELATIVE, C_X, C_Y, type WorldSnap,
+  CREATURE_STRIDE, C_ALIVE, C_ENERGY, C_HEADING, C_RELATIVE, C_SIZE, C_X, C_Y, type WorldSnap,
 } from "../worker/protocol";
 
 // Creatures use hues 0-190 (red -> cyan) for energy, so food takes pink, outside that range.
@@ -57,7 +57,12 @@ export class Renderer {
     };
   }
 
-  draw(snap: WorldSnap, selected: number | null, sense: { x: number; y: number } | null): void {
+  draw(
+    snap: WorldSnap,
+    selected: number | null,
+    sense: { x: number; y: number } | null,
+    sensorRange: number = snap.sensorRange,
+  ): void {
     this.fit(snap);
     const { ctx, scale } = this;
     ctx.setTransform(1, 0, 0, 1, 0, 0);
@@ -81,7 +86,7 @@ export class Renderer {
       const o = selected * CREATURE_STRIDE;
       const x = cr[o + C_X], y = cr[o + C_Y];
       ctx.beginPath();
-      ctx.arc(x, y, snap.sensorRange, 0, Math.PI * 2);
+      ctx.arc(x, y, sensorRange, 0, Math.PI * 2);
       ctx.strokeStyle = "rgba(57, 135, 229, 0.18)";
       ctx.lineWidth = px;
       ctx.stroke();
@@ -101,11 +106,12 @@ export class Renderer {
     for (let i = 0; i < snap.count; i++) {
       const o = i * CREATURE_STRIDE;
       if (!cr[o + C_ALIVE]) continue;
-      const x = cr[o + C_X], y = cr[o + C_Y], e = cr[o + C_ENERGY];
+      const x = cr[o + C_X], y = cr[o + C_Y], e = cr[o + C_ENERGY], s = cr[o + C_SIZE] || 1;
       ctx.fillStyle = `hsl(${Math.round(e * 190)}, 80%, ${45 + e * 15}%)`;
       ctx.save();
       ctx.translate(x, y);
       ctx.rotate(cr[o + C_HEADING]);
+      ctx.scale(s, s);
       ctx.beginPath();
       ctx.moveTo(7, 0);
       ctx.lineTo(-5, 4);
@@ -118,7 +124,7 @@ export class Renderer {
         ctx.strokeStyle = i === selected ? SELECT_COLOR : RELATIVE_COLOR;
         ctx.lineWidth = (i === selected ? 2 : 1.25) * px;
         ctx.beginPath();
-        ctx.arc(x, y, i === selected ? 11 : 9, 0, Math.PI * 2);
+        ctx.arc(x, y, (i === selected ? 11 : 9) * Math.max(1, s), 0, Math.PI * 2);
         ctx.stroke();
       }
     }

@@ -5,6 +5,7 @@ import { Rng } from "./rng";
 import { TorusGrid } from "./spatial";
 import { PREY_SENSOR_COUNT, sensePrey } from "./sensors";
 import { clamp, wrapAngle, wrapCoord } from "./math";
+import { defaultBody } from "./body";
 
 export interface World {
   readonly config: SimConfig;
@@ -23,7 +24,11 @@ export interface World {
   sensorViews: Float32Array[];
 }
 
-export type ControllerFactory = (creature: Creature, index: number, rng: Rng) => Controller;
+/**
+ * Builds the controller for creature `index`. Factories that attach a genome may
+ * also replace `creature.body` with the genome's evolved body.
+ */
+export type ControllerFactory = (creature: Creature, index: number, rng: Rng, config: SimConfig) => Controller;
 
 export interface WorldOptions {
   /**
@@ -69,13 +74,14 @@ export function createWorld(
       foodEaten: 0,
       age: 0,
       genomeId: null,
+      body: defaultBody(config),
       distanceTraveled: 0,
       energySpent: 0,
       alignmentSum: 0,
       alignmentTicks: 0,
       ticksTowardFood: 0,
     };
-    const ctrl = makeController(c, i, rng);
+    const ctrl = makeController(c, i, rng, config);
     if (enforceNeuralPrey && c.speciesId === "prey" && ctrl.kind !== "neural") {
       throw new Error(`Prey ${i} has a "${ctrl.kind}" controller; prey must be neural.`);
     }
@@ -116,7 +122,8 @@ export function step(world: World): void {
     if (!c.alive) continue;
 
     // Sense
-    const near = foodGrid.nearest(c.x, c.y, cfg.sensorRange);
+    const body = c.body;
+    const near = foodGrid.nearest(c.x, c.y, body.sensorRange);
     world.nearestFood[i] = near;
     const sensors = sensorViews[i];
     const nf = near >= 0 ? food[near] : null;
@@ -128,13 +135,13 @@ export function step(world: World): void {
     // Physics
     const turn = clamp(Number.isFinite(action.turn) ? action.turn : 0, -1, 1);
     const thrust = clamp(Number.isFinite(action.thrust) ? action.thrust : 0, 0, 1);
-    c.heading = wrapAngle(c.heading + turn * cfg.maxTurnRate);
-    c.speed = thrust * cfg.maxSpeed;
+    c.heading = wrapAngle(c.heading + turn * body.effTurn);
+    c.speed = thrust * body.maxSpeed;
     c.x = wrapCoord(c.x + Math.cos(c.heading) * c.speed, cfg.width);
     c.y = wrapCoord(c.y + Math.sin(c.heading) * c.speed, cfg.height);
 
     // Metabolism
-    const cost = cfg.basalCost + cfg.moveCost * c.speed * c.speed;
+    const cost = body.basal + cfg.moveCost * body.moveFactor * c.speed * c.speed;
     c.energy -= cost;
 
     // Recorded-only stats (sensors[1] = cos of bearing to food, pre-move)
@@ -147,7 +154,7 @@ export function step(world: World): void {
     }
 
     // Eating
-    const bite = foodGrid.nearest(c.x, c.y, cfg.eatRadius);
+    const bite = foodGrid.nearest(c.x, c.y, body.eatRadius);
     if (bite >= 0) {
       const f = food[bite];
       c.energy = Math.min(cfg.maxEnergy, c.energy + f.energy);

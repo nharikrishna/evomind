@@ -28,7 +28,7 @@ export function sensePrey(
     const rel = wrapAngle(Math.atan2(dy, dx) - c.heading);
     out[0] = Math.sin(rel);
     out[1] = Math.cos(rel);
-    out[2] = 1 - Math.sqrt(distSq) / cfg.sensorRange;
+    out[2] = 1 - Math.sqrt(distSq) / c.body.sensorRange;
   } else {
     out[0] = 0;
     out[1] = 0;

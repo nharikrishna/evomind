@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>EvoMind</title>
+    <link rel="stylesheet" href="/src/ui/style.css" />
+  </head>
+  <body>
+    <header class="top">
+      <div class="brand">
+        <h1>EvoMind</h1>
+        <span class="tagline">Neural creatures evolving by natural selection</span>
+      </div>
+      <span id="status" class="status">Starting…</span>
+    </header>
+
+    <nav class="toolbar" aria-label="Simulation controls">
+      <div class="group">
+        <button id="play" class="primary" title="Pause or resume the simulation (Space)">Pause</button>
+        <button id="step" title="Pause and advance exactly one tick: watch a brain react frame by frame">Step</button>
+        <label class="inline" title="Simulation ticks per screen frame">Speed
+          <select id="speed">
+            <option value="1">1&times;</option>
+            <option value="4" selected>4&times;</option>
+            <option value="16">16&times;</option>
+            <option value="64">64&times;</option>
+            <option value="256">256&times;</option>
+          </select>
+        </label>
+      </div>
+      <div class="group segmented" role="tablist" aria-label="View">
+        <button data-scene="evolve" class="active" role="tab" title="Watch the evolving population live">Evolve</button>
+        <button data-scene="best" role="tab" title="The best-ever brain alone in a fresh world">Watch best</button>
+        <button data-scene="compare" role="tab" title="Random generation-0 brains vs today&rsquo;s brains on the identical world">Gen 0 vs now</button>
+      </div>
+      <div class="group">
+        <button id="fast" title="Evolve as fast as possible without drawing; charts keep updating">Fast-forward</button>
+        <button id="skip10" title="Fast-forward 10 generations, then resume watching">+10 gens</button>
+        <button id="skip100" title="Fast-forward 100 generations, then resume watching">+100 gens</button>
+      </div>
+    </nav>
+
+    <main class="layout">
+      <div class="tiles">
+        <div class="tile hero">
+          <div class="tile-label">Generation</div>
+          <div id="t-gen" class="tile-value">0</div>
+        </div>
+        <div class="tile"><div class="tile-label">Average fitness</div><div id="t-mean" class="tile-value">–</div></div>
+        <div class="tile"><div class="tile-label">Best fitness</div><div id="t-best" class="tile-value">–</div></div>
+        <div class="tile"><div class="tile-label">Best ever</div><div id="t-ever" class="tile-value">–</div></div>
+        <div class="tile"><div class="tile-label">Alignment</div><div id="t-align" class="tile-value">–</div></div>
+        <div class="tile"><div class="tile-label">Survivors</div><div id="t-surv" class="tile-value">–</div></div>
+      </div>
+
+      <div class="main-row">
+        <section id="stage" class="stage"></section>
+        <aside class="side">
+          <div class="panel">
+            <h2>Selected creature</h2>
+            <div id="inspector"><p class="muted">Click a creature in the world.</p></div>
+          </div>
+          <div class="panel">
+            <h2>Brain</h2>
+            <div class="brain-wrap"><canvas id="brain"></canvas></div>
+            <p class="hint">Lines are weights (blue +, red &minus;, thicker = stronger). Circles light up with activity.</p>
+          </div>
+        </aside>
+      </div>
+
+      <div class="charts">
+        <div id="c-fitness"></div>
+        <div id="c-align"></div>
+        <div id="c-surv"></div>
+        <div id="c-div"></div>
+      </div>
+
+      <div class="bottom-row">
+        <details class="panel" id="settings-panel">
+          <summary><h2>Settings</h2></summary>
+          <form id="settings" class="settings"></form>
+        </details>
+        <div class="panel">
+          <h2>Data</h2>
+          <div class="data-buttons">
+            <button id="save" title="Download the whole run (settings, history, brains) as JSON">Save run</button>
+            <button id="load" title="Load a saved run, or a best.json from npm run evolve">Load…</button>
+            <button id="csv" title="Download per-generation stats as CSV">History CSV</button>
+          </div>
+          <input id="file" type="file" accept=".json,application/json" hidden />
+          <p class="hint">Load accepts a saved run or a <code>best.json</code> from <code>npm run evolve</code>.</p>
+        </div>
+      </div>
+    </main>
+
+    <div id="toast" class="toast" role="status" hidden></div>
+    <script type="module" src="/src/ui/main.ts"></script>
+  </body>
+</html>

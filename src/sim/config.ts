@@ -67,6 +67,17 @@ export interface SimConfig {
   bodyInitSigma: number;
   bodyMutationRate: number;
   bodyMutationSigma: number;
+
+  // Realism (all off in the lab setup so earlier results stay reproducible)
+  /**
+   * Biological size scaling. Mass = size² (2D bodies). Energy storage grows with mass,
+   * and metabolism and movement cost grow with mass^0.75 (Kleiber's law).
+   */
+  sizeScaling: boolean;
+  /** Max speed change per tick for a mass-1 body (heavier bodies accelerate slower). 0 = instant. */
+  acceleration: number;
+  /** Std-dev of gaussian noise added to every sensor reading each tick. 0 = perfect senses. */
+  sensorNoise: number;
 }
 
 export const DEFAULT_CONFIG: SimConfig = {
@@ -114,6 +125,10 @@ export const DEFAULT_CONFIG: SimConfig = {
   bodyInitSigma: 0.5,
   bodyMutationRate: 0.2,
   bodyMutationSigma: 0.15,
+
+  sizeScaling: false,
+  acceleration: 0,
+  sensorNoise: 0,
 };
 
 export function makeConfig(overrides: Partial<SimConfig> = {}): SimConfig {
@@ -125,3 +140,11 @@ export function makeConfig(overrides: Partial<SimConfig> = {}): SimConfig {
  * that the energy cost of a body actually matters to selection.
  */
 export const BODIES_PRESET: Partial<SimConfig> = { evolveBodies: true, energyWeight: 1 };
+
+/** Bodies plus the Phase 4.6 realism tweaks: Kleiber size scaling, inertia, noisy senses. */
+export const REALISM_PRESET: Partial<SimConfig> = {
+  ...BODIES_PRESET,
+  sizeScaling: true,
+  acceleration: 0.2,
+  sensorNoise: 0.05,
+};

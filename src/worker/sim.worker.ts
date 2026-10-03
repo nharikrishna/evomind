@@ -168,7 +168,7 @@ function snapWorld(v: View, relativeOf: number | null): WorldSnap {
     creatures[o + C_X] = c.x;
     creatures[o + C_Y] = c.y;
     creatures[o + C_HEADING] = c.heading;
-    creatures[o + C_ENERGY] = c.energy / w.config.maxEnergy;
+    creatures[o + C_ENERGY] = c.energy / c.body.maxEnergy;
     creatures[o + C_ALIVE] = c.alive ? 1 : 0;
     creatures[o + C_RELATIVE] =
       relativeOf !== null && c.genomeId !== null && evo.ancestorAt(c.genomeId, RELATIVE_DEPTH) === relativeOf ? 1 : 0;
@@ -240,6 +240,7 @@ function snapSelected(): { snap: SelectedSnap | null; relativeOf: number | null 
         size: c.body.size,
         turnRate: c.body.turnRate,
         basal: c.body.basal,
+        maxEnergy: c.body.maxEnergy,
         evolved: !!g?.genes.body,
       },
       brain: brain && {

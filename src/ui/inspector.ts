@@ -15,7 +15,7 @@ export function renderInspector(host: HTMLElement, s: SelectedSnap | null): void
   }
   const rows: [string, string][] = [
     ["Status", s.alive ? "alive" : "dead"],
-    ["Energy", s.energy.toFixed(1)],
+    ["Energy", `${s.energy.toFixed(1)} / ${s.body.maxEnergy.toFixed(0)}`],
     ["Speed", s.speed.toFixed(2)],
     ["Food eaten", String(s.foodEaten)],
     ["Age", `${s.age} ticks`],

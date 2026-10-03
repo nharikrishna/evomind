@@ -36,6 +36,10 @@ export interface Body {
   effTurn: number;
   /** Multiplier on movement cost (bigger bodies cost more to move). */
   moveFactor: number;
+  /** Energy storage capacity. */
+  maxEnergy: number;
+  /** Max change in speed per tick (Infinity = instant). */
+  accel: number;
 }
 
 const sigmoid = (x: number) => 1 / (1 + Math.exp(-x));
@@ -52,6 +56,8 @@ export function defaultBody(cfg: SimConfig): Body {
     eatRadius: cfg.eatRadius,
     effTurn: cfg.maxTurnRate,
     moveFactor: 1,
+    maxEnergy: cfg.maxEnergy,
+    accel: cfg.acceleration > 0 ? cfg.acceleration : Infinity,
   };
 }
 
@@ -77,8 +83,11 @@ export function geneForTrait(spec: TraitSpec, value: number): number {
  */
 export function bodyFromGenes(genes: Float32Array, cfg: SimConfig): Body {
   const [maxSpeed, sensorRange, size, turnRate] = TRAITS.map((t, i) => traitFromGene(t, genes[i]));
+  const mass = size * size;
+  // Kleiber's law: metabolic rate grows with mass^0.75, so big bodies are cheaper per unit mass.
+  const metabolic = cfg.sizeScaling ? mass ** 0.75 : mass;
   const basal =
-    cfg.costSize * size * size +
+    cfg.costSize * metabolic +
     cfg.costSensor * (sensorRange / cfg.sensorRange) +
     // Top speed needs muscle, which costs energy to maintain whether used or not.
     // Power to overcome drag grows with speed cubed, and muscle mass with power.
@@ -92,7 +101,9 @@ export function bodyFromGenes(genes: Float32Array, cfg: SimConfig): Body {
     basal,
     eatRadius: cfg.eatRadius * size,
     effTurn: turnRate / size,
-    moveFactor: size,
+    moveFactor: cfg.sizeScaling ? mass ** 0.75 : size,
+    maxEnergy: cfg.sizeScaling ? cfg.maxEnergy * mass : cfg.maxEnergy,
+    accel: cfg.acceleration > 0 ? cfg.acceleration / mass : Infinity,
   };
 }
 

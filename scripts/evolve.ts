@@ -3,6 +3,7 @@
  *
  *   npm run evolve -- --gens 200 --seeds 1,2,3 --out runs
  *   npm run evolve -- --bodies                      (evolvable bodies + energy-surplus fitness)
+ *   npm run evolve -- --realism                     (bodies + size scaling, inertia, sensor noise)
  *   npm run evolve -- --bodies --set costSpeed=0.05,mutationRate=0.15
  *
  * For each seed: evolves a population, prints progress, then runs the Phase 3
@@ -11,7 +12,7 @@
  */
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { BODIES_PRESET, makeConfig, type SimConfig } from "../src/sim/config";
+import { BODIES_PRESET, makeConfig, REALISM_PRESET, type SimConfig } from "../src/sim/config";
 import { Evolution } from "../src/evo/generation";
 import { proofReport, type ProofReport } from "../src/analysis/baselines";
 import { genomeToJSON, historyToCSV } from "../src/analysis/history";
@@ -26,7 +27,8 @@ const seeds = arg("seeds", arg("seed", "1")).split(",").map(Number);
 const outDir = arg("out", "runs");
 const every = Number(arg("every", "10"));
 const evalEpisodes = Number(arg("eval", "5"));
-const bodies = process.argv.includes("--bodies");
+const realism = process.argv.includes("--realism");
+const bodies = realism || process.argv.includes("--bodies");
 
 /** --set key=value,key=value overrides any numeric/boolean config field. */
 function overrides(): Partial<SimConfig> {
@@ -45,7 +47,7 @@ interface Verdict { seed: number; report: ProofReport; pass: boolean }
 const verdicts: Verdict[] = [];
 
 for (const seed of seeds) {
-  const config = makeConfig({ seed, ...(bodies ? BODIES_PRESET : {}), ...overrides() });
+  const config = makeConfig({ seed, ...(realism ? REALISM_PRESET : bodies ? BODIES_PRESET : {}), ...overrides() });
   const evo = new Evolution(config);
   const t0 = performance.now();
   console.log(`\n=== seed ${seed}: ${gens} generations ===`);

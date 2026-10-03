@@ -47,7 +47,7 @@ export interface SelectedSnap {
   ancestry: { id: number; generation: number }[];
   ancestryMore: number;
   relatives: number;
-  body: { maxSpeed: number; sensorRange: number; size: number; turnRate: number; basal: number; evolved: boolean };
+  body: { maxSpeed: number; sensorRange: number; size: number; turnRate: number; basal: number; maxEnergy: number; evolved: boolean };
   brain: {
     shape: BrainShape;
     weights: Float32Array;

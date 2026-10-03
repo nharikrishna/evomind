@@ -34,5 +34,5 @@ export function sensePrey(
     out[1] = 0;
     out[2] = 0;
   }
-  out[3] = c.energy / cfg.maxEnergy;
+  out[3] = c.energy / c.body.maxEnergy;
 }

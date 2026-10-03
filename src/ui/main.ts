@@ -1,4 +1,4 @@
-import { BODIES_PRESET, DEFAULT_CONFIG, type SimConfig } from "../sim/config";
+import { DEFAULT_CONFIG, REALISM_PRESET, type SimConfig } from "../sim/config";
 import type { GenerationStats } from "../analysis/metrics";
 import { historyToCSV } from "../analysis/history";
 import type { FromWorker, SceneKind, ToWorker } from "../worker/protocol";
@@ -16,8 +16,8 @@ const SERIES_2 = "#d95926";
 
 // ---------- state ----------
 
-/** The app starts with bodies evolving; the lab setup is one checkbox away in Settings. */
-const APP_DEFAULTS: SimConfig = { ...DEFAULT_CONFIG, ...BODIES_PRESET };
+/** The app starts with the most realistic setup; the lab setup is a few switches away in Settings. */
+const APP_DEFAULTS: SimConfig = { ...DEFAULT_CONFIG, ...REALISM_PRESET };
 let config: SimConfig = { ...APP_DEFAULTS };
 let history: GenerationStats[] = [];
 let generation = 0;

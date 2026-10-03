@@ -85,6 +85,8 @@ export function createWorld(
     if (enforceNeuralPrey && c.speciesId === "prey" && ctrl.kind !== "neural") {
       throw new Error(`Prey ${i} has a "${ctrl.kind}" controller; prey must be neural.`);
     }
+    // The genome may have given this creature a smaller energy store than the starting energy.
+    c.energy = Math.min(c.energy, c.body.maxEnergy);
     creatures.push(c);
     controllers.push(ctrl);
   }
@@ -128,6 +130,13 @@ export function step(world: World): void {
     const sensors = sensorViews[i];
     const nf = near >= 0 ? food[near] : null;
     sensePrey(c, near, nf ? nf.x : 0, nf ? nf.y : 0, foodGrid.foundDistSq, cfg, sensors);
+    // Stats use the true bearing; the brain gets the (possibly noisy) reading.
+    const trueCos = sensors[1];
+    if (cfg.sensorNoise > 0) {
+      for (let k = 0; k < sensors.length; k++) {
+        sensors[k] = clamp(sensors[k] + world.rng.gaussian() * cfg.sensorNoise, -1, 1);
+      }
+    }
 
     // Decide (the organism's business, not ours)
     controllers[i].act(sensors, action);
@@ -136,7 +145,9 @@ export function step(world: World): void {
     const turn = clamp(Number.isFinite(action.turn) ? action.turn : 0, -1, 1);
     const thrust = clamp(Number.isFinite(action.thrust) ? action.thrust : 0, 0, 1);
     c.heading = wrapAngle(c.heading + turn * body.effTurn);
-    c.speed = thrust * body.maxSpeed;
+    // Inertia: speed moves toward the target by at most body.accel per tick.
+    const target = thrust * body.maxSpeed;
+    c.speed = body.accel === Infinity ? target : c.speed + clamp(target - c.speed, -body.accel, body.accel);
     c.x = wrapCoord(c.x + Math.cos(c.heading) * c.speed, cfg.width);
     c.y = wrapCoord(c.y + Math.sin(c.heading) * c.speed, cfg.height);
 
@@ -148,16 +159,16 @@ export function step(world: World): void {
     c.energySpent += cost;
     c.distanceTraveled += c.speed;
     if (near >= 0 && c.speed > MOVING_SPEED) {
-      c.alignmentSum += sensors[1];
+      c.alignmentSum += trueCos;
       c.alignmentTicks++;
-      if (sensors[1] > TOWARD_FOOD_COS) c.ticksTowardFood++;
+      if (trueCos > TOWARD_FOOD_COS) c.ticksTowardFood++;
     }
 
     // Eating
     const bite = foodGrid.nearest(c.x, c.y, body.eatRadius);
     if (bite >= 0) {
       const f = food[bite];
-      c.energy = Math.min(cfg.maxEnergy, c.energy + f.energy);
+      c.energy = Math.min(body.maxEnergy, c.energy + f.energy);
       c.foodEaten++;
       f.active = false;
       foodGrid.remove(bite);

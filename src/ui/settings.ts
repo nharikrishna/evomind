@@ -30,6 +30,11 @@ const SECTIONS: [string, Field[]][] = [
     { key: "maxSpeed", label: "Default max speed", step: 0.25, min: 0.1 },
     { key: "sensorRange", label: "Default sensor range", step: 10, min: 10 },
   ]],
+  ["Realism", [
+    { key: "sizeScaling", label: "Size scaling (Kleiber)", bool: true },
+    { key: "acceleration", label: "Acceleration (0 = instant)", step: 0.05, min: 0 },
+    { key: "sensorNoise", label: "Sensor noise (σ)", step: 0.01, min: 0, max: 1 },
+  ]],
   ["Evolution", [
     { key: "eliteCount", label: "Elites kept", step: 1, min: 0, int: true },
     { key: "tournamentSize", label: "Tournament size", step: 1, min: 1, int: true },

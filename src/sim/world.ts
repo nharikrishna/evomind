@@ -6,6 +6,9 @@ import { TorusGrid } from "./spatial";
 import { preySensorCount, sensePrey } from "./sensors";
 import { clamp, wrapAngle, wrapCoord } from "./math";
 import { defaultBody } from "./body";
+import { FertilityMap, sproutPosition } from "./food";
+import { seasonFactor } from "./seasons";
+import { BiomeMap, BIOMES, GRASSLAND } from "./biomes";
 
 /**
  * The world. Arrays are parallel: creatures[i] is driven by controllers[i] and
@@ -27,6 +30,12 @@ export interface World {
   sensorViews: Float32Array[];
   /** Next unused creature id. */
   nextCreatureId: number;
+  /** Plant food model only: where plants grow well. */
+  fertility: FertilityMap | null;
+  /** Runtime food-supply multiplier (environment shifts, changed mid-run). 1 = normal. */
+  foodBoost: number;
+  /** Biome regions (null = uniform world). */
+  biomeMap: BiomeMap | null;
   readonly enforceNeuralPrey: boolean;
 }
 
@@ -60,6 +69,7 @@ export function newCreature(world: World, x: number, y: number, heading: number)
     genomeId: null,
     body: defaultBody(world.config),
     children: 0,
+    biome: -1,
     distanceTraveled: 0,
     energySpent: 0,
     alignmentSum: 0,
@@ -112,15 +122,15 @@ export function createWorld(
   const rng = new Rng(config.seed);
   const foodGrid = new TorusGrid(config.width, config.height, 100);
 
+  const fertility = config.foodModel === "plants" ? new FertilityMap(config.width, config.height, config) : null;
+  const biomeMap = config.biomes ? new BiomeMap(config.width, config.height, config) : null;
   const food: Food[] = [];
+  const placed: number[] = [];
   for (let i = 0; i < config.foodCount; i++) {
-    const f: Food = {
-      id: i,
-      x: rng.range(0, config.width),
-      y: rng.range(0, config.height),
-      energy: config.foodEnergy,
-      active: true,
-    };
+    // Plants seed the initial meadow from each other, so it starts out patchy.
+    const pos = fertility ? sproutPosition(config, fertility, placed, rng, biomeMap) : { x: rng.range(0, config.width), y: rng.range(0, config.height) };
+    const f: Food = { id: i, x: pos.x, y: pos.y, energy: config.foodEnergy, active: true };
+    if (fertility) placed.push(f.x, f.y);
     food.push(f);
     foodGrid.insert(i, f.x, f.y);
   }
@@ -136,6 +146,9 @@ export function createWorld(
     nearestFood: [],
     sensorViews: [],
     nextCreatureId: 0,
+    fertility,
+    foodBoost: 1,
+    biomeMap,
     enforceNeuralPrey,
   };
 
@@ -163,11 +176,15 @@ export function step(world: World): void {
 
     // Sense
     const body = c.body;
-    const near = foodGrid.nearest(c.x, c.y, body.sensorRange);
+    const biomeIdx = world.biomeMap ? world.biomeMap.at(c.x, c.y) : -1;
+    const biome = biomeIdx >= 0 ? BIOMES[biomeIdx] : null;
+    c.biome = biomeIdx;
+    const range = biome?.fog ? body.sensorRange * cfg.fogFactor : body.sensorRange;
+    const near = foodGrid.nearest(c.x, c.y, range);
     world.nearestFood[i] = near;
     const sensors = sensorViews[i];
     const nf = near >= 0 ? food[near] : null;
-    sensePrey(c, near, nf ? nf.x : 0, nf ? nf.y : 0, foodGrid.foundDistSq, cfg, sensors);
+    sensePrey(c, near, nf ? nf.x : 0, nf ? nf.y : 0, foodGrid.foundDistSq, cfg, sensors, range, biomeIdx >= 0 ? biomeIdx : GRASSLAND);
     // Stats use the true bearing; the brain gets the (possibly noisy) reading.
     const trueCos = sensors[1];
     if (cfg.sensorNoise > 0) {
@@ -186,12 +203,23 @@ export function step(world: World): void {
     // Inertia: speed moves toward the target by at most body.accel per tick.
     const target = thrust * body.maxSpeed;
     c.speed = body.accel === Infinity ? target : c.speed + clamp(target - c.speed, -body.accel, body.accel);
-    c.x = wrapCoord(c.x + Math.cos(c.heading) * c.speed, cfg.width);
-    c.y = wrapCoord(c.y + Math.sin(c.heading) * c.speed, cfg.height);
+    const nx = wrapCoord(c.x + Math.cos(c.heading) * c.speed, cfg.width);
+    const ny = wrapCoord(c.y + Math.sin(c.heading) * c.speed, cfg.height);
+    // Barrier between biomes: a failed crossing stops the creature and turns it back.
+    if (world.biomeMap && cfg.biomeCrossing < 1 && world.biomeMap.at(nx, ny) !== biomeIdx && world.rng.next() >= cfg.biomeCrossing) {
+      c.heading = wrapAngle(c.heading + Math.PI);
+      c.speed = 0;
+    } else {
+      c.x = nx;
+      c.y = ny;
+    }
 
     // Metabolism. Ageing: upkeep grows with age (doubles at age = agingScale).
     const aging = cfg.agingScale > 0 ? 1 + (c.age / cfg.agingScale) ** 2 : 1;
-    const cost = body.basal * aging + cfg.moveCost * body.moveFactor * c.speed * c.speed;
+    // Biomes: cold costs heat through the body surface (∝ size); mud makes moving dearer.
+    const cold = biome?.cold ? cfg.coldCost * body.size : 0;
+    const mud = biome?.mud ? cfg.mudFactor : 1;
+    const cost = body.basal * aging + cold + cfg.moveCost * body.moveFactor * c.speed * c.speed * mud;
     c.energy -= cost;
 
     // Recorded-only stats (true cos of bearing to food, pre-move)
@@ -221,12 +249,25 @@ export function step(world: World): void {
     }
   }
 
-  // Food regrowth
+  // Food regrowth (scaled by season and any environment shift)
+  const regrow = Math.min(1, cfg.respawnRate * seasonFactor(cfg, world.tick) * world.foodBoost);
+  let parents: number[] | null = null;
   for (let i = 0; i < food.length; i++) {
     const f = food[i];
-    if (f.active || world.rng.next() >= cfg.respawnRate) continue;
-    f.x = world.rng.range(0, cfg.width);
-    f.y = world.rng.range(0, cfg.height);
+    if (f.active || world.rng.next() >= regrow) continue;
+    if (world.fertility) {
+      // Seed dispersal from the plants standing right now (built lazily, once per tick).
+      if (!parents) {
+        parents = [];
+        for (const p of food) if (p.active) parents.push(p.x, p.y);
+      }
+      const pos = sproutPosition(cfg, world.fertility, parents, world.rng, world.biomeMap);
+      f.x = pos.x;
+      f.y = pos.y;
+    } else {
+      f.x = world.rng.range(0, cfg.width);
+      f.y = world.rng.range(0, cfg.height);
+    }
     f.active = true;
     foodGrid.insert(i, f.x, f.y);
   }

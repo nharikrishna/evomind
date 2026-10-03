@@ -21,6 +21,8 @@ export interface Creature {
   body: Body;
   /** Offspring produced (natural mode). */
   children: number;
+  /** Biome the creature was in last tick (-1 = world has no biomes). */
+  biome: number;
 
   // Recorded-only: these never feed back into behavior; they exist for analysis.
   distanceTraveled: number;

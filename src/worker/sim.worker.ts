@@ -17,7 +17,7 @@ import { Evolution, runToEnd, type LineageEntry, type RunFile } from "../evo/gen
 import { NaturalEvolution, type NaturalRunFile } from "../evo/natural";
 import { genomeFromJSON } from "../analysis/history";
 import {
-  CREATURE_STRIDE, C_AGE, C_ALIVE, C_ENERGY, C_FAMILY, C_HEADING, C_ID, C_RELATIVE, C_SIZE, C_X, C_Y,
+  CREATURE_STRIDE, C_AGE, C_ALIVE, C_ENERGY, C_HEADING, C_ID, C_MAXSPEED, C_RELATIVE, C_SENSOR, C_SIZE, C_X, C_Y,
   type FromWorker, type SceneKind, type SelectedSnap, type ToWorker, type WorldSnap,
 } from "./protocol";
 
@@ -25,8 +25,8 @@ declare const self: DedicatedWorkerGlobalScope;
 
 /** Generations of descent that define "relatives" (shared great-grandparent). */
 const RELATIVE_DEPTH = 3;
-/** Generations of descent that define a "clan" for family colouring. */
-const CLAN_DEPTH = 8;
+/** How far down the family tree to look for a successor when a followed creature dies. */
+const FOLLOW_DEPTH = 12;
 const ANCESTRY_SHOWN = 8;
 
 interface View {
@@ -47,7 +47,7 @@ let evoWorld: World | null = null;
 let scene: SceneKind = "evolve";
 let views: View[] = [];
 let sceneEpisode = 0;
-let selected: { view: number; id: number } | null = null;
+let selected: { view: number; id: number; genomeId: number | null } | null = null;
 let fast = false;
 let fastTarget: number | null = null;
 /** A genome loaded from a file for replay (overrides the best-ever in the "best" scene). */
@@ -121,8 +121,8 @@ function flushNatural(): void {
 
 /** A config turned into a plain (non-reproducing) test world with the standard lab food supply. */
 function labLike(cfg: SimConfig): SimConfig {
-  const { foodCount, foodEnergy, respawnRate, episodeTicks } = DEFAULT_CONFIG;
-  return { ...cfg, mode: "lab", agingScale: 0, foodCount, foodEnergy, respawnRate, episodeTicks };
+  const { foodCount, foodEnergy, respawnRate, episodeTicks, foodModel } = DEFAULT_CONFIG;
+  return { ...cfg, mode: "lab", agingScale: 0, seasonLength: 0, biomes: false, foodCount, foodEnergy, respawnRate, episodeTicks, foodModel };
 }
 
 function bestSource(): { genome: Genome; config: SimConfig; label: string } | null {
@@ -154,7 +154,7 @@ function buildSceneViews(): void {
     }
     const world = createWorld({ ...src.config, seed, creatureCount: 1 }, neuralFactory([src.genome]));
     views = [{ label: src.label, world }];
-    selected = { view: 0, id: world.creatures[0].id };
+    selected = { view: 0, id: world.creatures[0].id, genomeId: world.creatures[0].genomeId };
   } else {
     const test = nat ? labLike(cfg) : cfg;
     const current = nat ? nat.livingGenomes() : evo!.population;
@@ -194,7 +194,10 @@ function advance(ticks: number): void {
         sceneEpisode++;
         const keep = scene === "best" ? selected : null;
         buildSceneViews();
-        if (scene === "best" && views[0]) selected = { view: 0, id: views[0].world.creatures[0].id };
+        if (scene === "best" && views[0]) {
+          const c0 = views[0].world.creatures[0];
+          selected = { view: 0, id: c0.id, genomeId: c0.genomeId };
+        }
         else selected = keep;
       }
       for (const v of views) if (!isEpisodeOver(v.world)) step(v.world);
@@ -268,8 +271,9 @@ function snapWorld(v: View, relativeOf: number | null): WorldSnap {
     creatures[o + C_RELATIVE] = relativeOf !== null && known && lin.ancestorAt(gid!, RELATIVE_DEPTH) === relativeOf ? 1 : 0;
     creatures[o + C_SIZE] = c.body.size;
     creatures[o + C_ID] = c.id;
-    creatures[o + C_FAMILY] = known ? lin.ancestorAt(gid!, CLAN_DEPTH) : -1;
+    creatures[o + C_MAXSPEED] = c.body.maxSpeed;
     creatures[o + C_AGE] = c.age;
+    creatures[o + C_SENSOR] = c.body.sensorRange;
     eaten += c.foodEaten;
   }
   const active = w.food.filter((f) => f.active);
@@ -291,6 +295,7 @@ function snapWorld(v: View, relativeOf: number | null): WorldSnap {
     meanFood: n ? eaten / n : 0,
     creatures,
     food,
+    fertility: w.fertility ? { cols: w.fertility.cols, rows: w.fertility.rows, values: Array.from(w.fertility.values) } : null,
   };
 }
 
@@ -300,9 +305,9 @@ function snapSelected(): { snap: SelectedSnap | null; relativeOf: number | null 
   const v = views[sel.view];
   const index = v ? v.world.creatures.findIndex((c) => c.id === sel.id) : -1;
   if (index < 0) {
-    // Natural mode removes the dead, so a selected creature can vanish.
-    selected = null;
-    return { snap: null, relativeOf: null };
+    // Natural mode removes the dead: follow the lineage to the closest living relative.
+    selected = followLineage(sel);
+    return selected ? snapSelected() : { snap: null, relativeOf: null };
   }
   const c = v.world.creatures[index];
   const ctrl = v.world.controllers[index];
@@ -359,6 +364,47 @@ function snapSelected(): { snap: SelectedSnap | null; relativeOf: number | null 
       sense: c.alive && fi >= 0 && v.world.food[fi].active ? { x: v.world.food[fi].x, y: v.world.food[fi].y } : null,
     },
   };
+}
+
+/**
+ * The followed creature died. Pick its closest living descendant (child first,
+ * then grandchild, ...; oldest wins ties); failing that, the closest living
+ * relative by shared ancestor. Tell the UI who we switched to.
+ */
+function followLineage(sel: { view: number; id: number; genomeId: number | null }): typeof selected {
+  const lin = lineageSrc();
+  const world = views[sel.view]?.world;
+  const dead = sel.genomeId;
+  let best: { i: number; depth: number; age: number; relation: string } | null = null;
+  if (world && dead !== null && lin.lineage.has(dead)) {
+    world.creatures.forEach((c, i) => {
+      if (c.genomeId === null) return;
+      // Descendant? Walk up from the living creature looking for the dead one.
+      let cur: number | null = c.genomeId;
+      for (let d = 1; d <= FOLLOW_DEPTH && cur !== null; d++) {
+        cur = lin.lineage.get(cur)?.parentId ?? null;
+        if (cur === dead) {
+          const relation = d === 1 ? "child" : d === 2 ? "grandchild" : `descendant (${d} generations down)`;
+          if (!best || d < best.depth || (d === best.depth && c.age > best.age)) best = { i, depth: d, age: c.age, relation };
+          return;
+        }
+      }
+    });
+    if (!best) {
+      // No descendants alive: closest relative = smallest k with a shared ancestor k steps up.
+      for (let k = 1; k <= FOLLOW_DEPTH && !best; k++) {
+        const anc = lin.ancestorAt(dead, k);
+        world.creatures.forEach((c, i) => {
+          if (c.genomeId === null || best) return;
+          if (lin.ancestorAt(c.genomeId, k) === anc) best = { i, depth: 100 + k, age: c.age, relation: "relative" };
+        });
+      }
+    }
+  }
+  const found = best as { i: number; relation: string } | null;
+  const next = found && world ? world.creatures[found.i] : null;
+  post({ t: "follow", from: sel.id, to: next ? next.id : null, relation: found ? found.relation : "" });
+  return next ? { view: sel.view, id: next.id, genomeId: next.genomeId } : null;
 }
 
 function sendFrame(): void {
@@ -429,8 +475,13 @@ self.onmessage = (ev: MessageEvent<ToWorker>) => {
         if (msg.scene === "evolve") replay = null;
         setScene(msg.scene);
         break;
-      case "select":
-        selected = msg.id === null ? null : { view: msg.view, id: msg.id };
+      case "select": {
+        const c = msg.id === null ? null : views[msg.view]?.world.creatures.find((x) => x.id === msg.id);
+        selected = c ? { view: msg.view, id: c.id, genomeId: c.genomeId } : null;
+        break;
+      }
+      case "env":
+        if (nat) nat.world.foodBoost = msg.foodBoost;
         break;
       case "export":
         post({ t: "export", run: (nat ?? evo)!.toJSON() });

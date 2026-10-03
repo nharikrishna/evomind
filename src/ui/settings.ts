@@ -33,6 +33,13 @@ const SECTIONS: [string, Field[]][] = [
     { key: "foodCount", label: "Food items", step: 5, min: 0, max: 2000, int: true },
     { key: "foodEnergy", label: "Energy per food", step: 5, min: 1 },
     { key: "respawnRate", label: "Food regrowth / tick", step: 0.005, min: 0, max: 1 },
+    { key: "foodModel", label: "Food model", choices: [["plants", "Plants (patches)"], ["random", "Random scatter"]] },
+    { key: "fertilityScale", label: "Fertile patch size (px)", step: 20, min: 40 },
+    { key: "fertilityContrast", label: "Fertility contrast", step: 0.25, min: 0 },
+    { key: "seedSpread", label: "Seed spread (px)", step: 5, min: 1 },
+    { key: "seedLocalProb", label: "Seeds near parent plant", step: 0.05, min: 0, max: 1 },
+    { key: "seasonLength", label: "Year length (0 = no seasons)", step: 1000, min: 0, int: true },
+    { key: "seasonAmplitude", label: "Season strength (0–1)", step: 0.1, min: 0, max: 1 },
     { key: "episodeTicks", label: "Ticks per generation", step: 250, min: 100, int: true },
   ]],
   ["Body", [

@@ -5,11 +5,12 @@ import type { GenerationStats } from "../analysis/metrics";
 import type { LabScore, NaturalStats } from "../evo/natural";
 import { historyToCSV } from "../analysis/history";
 import type { FromWorker, SceneKind, ToWorker } from "../worker/protocol";
-import { Renderer, type ColorMode } from "./renderer";
+import { Renderer, traitColor, type ColorMode, type ColorRange } from "./renderer";
 import { BrainView } from "./brainView";
 import { LineChart, X_GENERATION, X_TICK, type Row } from "./chart";
 import { SettingsForm, type Preset } from "./settings";
 import { renderInspector } from "./inspector";
+import { seasonFactor, seasonInfo } from "../sim/seasons";
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 
@@ -58,6 +59,10 @@ const skip10 = $<HTMLButtonElement>("skip10");
 const skip100 = $<HTMLButtonElement>("skip100");
 const speedSel = $<HTMLSelectElement>("speed");
 const colorSel = $<HTMLSelectElement>("color");
+const foodSel = $<HTMLSelectElement>("food-boost");
+const followNote = $<HTMLDivElement>("follow-note");
+const appEl = $<HTMLDivElement>("app");
+const sidebarBtn = $<HTMLButtonElement>("sidebar-toggle");
 const inspectorEl = $<HTMLDivElement>("inspector");
 const brainView = new BrainView($<HTMLCanvasElement>("brain"));
 const toastEl = $<HTMLDivElement>("toast");
@@ -126,6 +131,12 @@ const natCharts = [
     ],
     format: (v) => v.toFixed(0),
   }),
+  new LineChart($("c-life"), {
+    title: "Lifespan",
+    subtitle: "average age at death, in ticks",
+    series: [{ key: "meanLifespan", label: "Lifespan", color: SERIES_1 }],
+    format: (v) => v.toFixed(0),
+  }),
   new LineChart($("c-gen"), {
     title: "Generations of descent",
     subtitle: "how many parent-child steps from the founders",
@@ -147,6 +158,19 @@ const natCharts = [
     subtitle: "mean distance between brains; falling to 0 = clones",
     series: [{ key: "diversity", label: "Diversity", color: SERIES_1 }],
     format: fmt1,
+  }),
+  new LineChart($("c-cluster"), {
+    title: "Food clustering",
+    subtitle: "1 = random scatter, lower = patchier",
+    series: [{ key: "foodClustering", label: "Clustering", color: SERIES_1 }],
+    format: (v) => v.toFixed(2),
+    yRange: [0, 1.2],
+  }),
+  new LineChart($("c-foodmap"), {
+    title: "Food on the map",
+    subtitle: "standing plants (eaten ones regrow)",
+    series: [{ key: "foodOnMap", label: "Food", color: SERIES_1 }],
+    format: (v) => v.toFixed(0),
   }),
 ];
 const lifeCharts = [
@@ -218,6 +242,7 @@ settings.load(config);
 interface ViewEls {
   root: HTMLDivElement;
   label: HTMLSpanElement;
+  legend: HTMLSpanElement;
   meta: HTMLSpanElement;
   overlay: HTMLDivElement;
   renderer: Renderer;
@@ -236,7 +261,9 @@ function ensureViews(n: number): void {
     const label = document.createElement("span");
     const meta = document.createElement("span");
     meta.className = "meta";
-    head.append(label, meta);
+    const legend = document.createElement("span");
+    legend.className = "legend";
+    head.append(label, legend, meta);
     const wrap = document.createElement("div");
     wrap.className = "view-canvas-wrap";
     const canvas = document.createElement("canvas");
@@ -250,9 +277,10 @@ function ensureViews(n: number): void {
     canvas.addEventListener("click", (ev) => {
       const snap = lastFrame?.views[k];
       if (!snap) return;
+      followNote.hidden = true;
       send({ t: "select", view: k, id: renderer.pick(snap, ev) });
     });
-    return { root, label, meta, overlay, renderer };
+    return { root, label, legend, meta, overlay, renderer };
   });
 }
 
@@ -263,9 +291,20 @@ function drawFrame(f: Extract<FromWorker, { t: "frame" }>): void {
   f.views.forEach((snap, k) => {
     const v = views[k];
     const sel = f.selected && f.selected.view === k ? f.selected : null;
-    v.renderer.draw(snap, sel ? sel.id : null, sel ? sel.sense : null, sel?.body.sensorRange, colorMode);
+    // Fertile ground fades in lean seasons (live natural world only).
+    let ground = 1;
+    if (snap.endless && config.seasonLength > 0) {
+      const a = config.seasonAmplitude || 1;
+      ground = 0.3 + 0.7 * ((seasonFactor(config, f.tick) - (1 - a)) / (2 * a));
+    }
+    const range = v.renderer.draw(snap, sel ? sel.id : null, sel ? sel.sense : null, sel?.body.sensorRange, colorMode, ground);
+    renderLegend(v.legend, range);
     if (f.scene === "evolve") {
-      v.label.textContent = f.mode === "natural" ? `Living world · tick ${f.tick.toLocaleString()}` : `Generation ${f.generation}`;
+      const season = f.mode === "natural" ? seasonInfo(config, f.tick) : null;
+      v.label.textContent =
+        f.mode === "natural"
+          ? `Living world · tick ${f.tick.toLocaleString()}` + (season ? ` · ${season.name}, year ${season.year + 1}` : "")
+          : `Generation ${f.generation}`;
     } else {
       v.label.textContent = snap.label;
     }
@@ -283,9 +322,45 @@ function drawFrame(f: Extract<FromWorker, { t: "frame" }>): void {
       v.overlay.append(line, sub);
     }
   });
+  if (!f.selected) followNote.hidden = true;
+  renderSeason(f);
   renderInspector(inspectorEl, f.selected);
   if (f.selected?.brain) brainView.draw(f.selected.brain);
   else brainView.clear();
+}
+
+const LEGEND_LABEL: Record<ColorMode, [string, (v: number) => string]> = {
+  energy: ["Energy", (v) => v.toFixed(0)],
+  size: ["Size", (v) => `${v.toFixed(2)}×`],
+  speed: ["Max speed", (v) => v.toFixed(1)],
+  sensor: ["Sensor", (v) => `${v.toFixed(0)}px`],
+  age: ["Age", (v) => v.toFixed(0)],
+};
+
+/** Colour key for the world view: what dim/bright (or red/cyan) means right now. */
+function renderLegend(el: HTMLSpanElement, range: ColorRange | null): void {
+  el.replaceChildren();
+  const bar = document.createElement("i");
+  const [name, fmt] = LEGEND_LABEL[colorMode];
+  if (colorMode === "energy") {
+    bar.style.background = "linear-gradient(90deg, hsl(0,80%,45%), hsl(95,80%,52%), hsl(190,80%,60%))";
+    el.append(document.createTextNode("starving"), bar, document.createTextNode("full"));
+    return;
+  }
+  if (!range) return;
+  bar.style.background = `linear-gradient(90deg, ${traitColor(0)}, ${traitColor(0.5)}, ${traitColor(1)})`;
+  el.append(document.createTextNode(`${name} ${fmt(range.min)}`), bar, document.createTextNode(fmt(range.max)));
+}
+
+/** Header badge: current season and progress through the year (natural mode with seasons). */
+function renderSeason(f: Extract<FromWorker, { t: "frame" }>): void {
+  const badge = $("season");
+  const info = f.mode === "natural" ? seasonInfo(config, f.tick) : null;
+  badge.hidden = !info;
+  if (!info) return;
+  badge.dataset.season = info.name;
+  $("season-text").textContent = `${info.name} · year ${info.year + 1}`;
+  $("season-fill").style.width = `${(info.phase * 100).toFixed(1)}%`;
 }
 
 /** Show the chart sections and labels that fit the current mode. */
@@ -296,13 +371,18 @@ function applyMode(): void {
   $("life-section").hidden = !nat;
   $("body-section").hidden = !config.evolveBodies;
   for (const c of bodyCharts) c.setXAxis(nat ? X_TICK : X_GENERATION);
+  // Shade the lean half of each year on natural-mode time charts.
+  const shade = nat && config.seasonLength > 0 ? "lean" : null;
+  for (const c of [...natCharts, ...lifeCharts, ...bodyCharts]) c.setShade(shade);
+  $("food-ctl").hidden = !nat;
+  foodSel.value = "1";
   for (const c of [...natCharts, ...lifeCharts, labScoreChart]) c.setEmptyText("Waiting for the first sample…");
   labScoreChart.setEmptyText(`The first lab test runs at tick ${config.labTestEvery.toLocaleString()}…`);
   fitnessChart.setSubtitle(config.energyWeight > 0 ? "food eaten minus energy burned, in food units" : "food eaten per creature");
   skip10.textContent = nat ? "+10k ticks" : "+10 gens";
   skip100.textContent = nat ? "+100k ticks" : "+100 gens";
   const labels = nat
-    ? ["Ticks", "Population", "Births / 1k ticks", "Deaths / 1k ticks", "Generations", "Lab test score"]
+    ? ["Ticks", "Population", "Births / 1k ticks", "Avg lifespan", "Generations", "Lab test score"]
     : ["Generation", "Average fitness", "Best fitness", "Best ever", "Alignment", "Survivors"];
   labels.forEach((l, k) => ($(`l${k}`).textContent = l));
   chartsDirty = true;
@@ -316,7 +396,10 @@ function updateTiles(): void {
     t(0, fmtTicks(progress));
     t(1, s ? String(s.population) : "–");
     t(2, s ? s.birthsK.toFixed(0) : "–");
-    t(3, s ? s.deathsK.toFixed(0) : "–");
+    // Lifespan from the last few samples that had deaths (single windows are noisy).
+    const recent = natRows.slice(-8).filter((r) => r.deaths > 0);
+    const life = recent.reduce((a, r) => a + r.meanLifespan * r.deaths, 0) / (recent.reduce((a, r) => a + r.deaths, 0) || 1);
+    t(3, recent.length ? `${life.toFixed(0)} ticks` : "–");
     t(4, s ? s.meanGeneration.toFixed(0) : "–");
     t(5, lab ? `${lab.meanFood.toFixed(1)}` : "–");
     return;
@@ -346,7 +429,8 @@ function updateStatus(): void {
   playBtn.textContent = running ? "Pause" : "Play";
   for (const b of sceneBtns) b.classList.toggle("active", b.dataset.scene === scene);
   sceneBtns[2].textContent = nat ? "Random vs now" : "Gen 0 vs now";
-  sceneBtns[1].textContent = nat ? "Watch champion" : "Watch best";
+  // "Watch best" only makes sense with a fitness score (lab mode).
+  sceneBtns[1].hidden = nat;
 }
 
 /** Natural samples, with births/deaths converted to per-1,000-tick rates. */
@@ -437,6 +521,12 @@ worker.onmessage = (ev: MessageEvent<FromWorker>) => {
       scene = m.scene;
       updateStatus();
       break;
+    case "follow":
+      followNote.hidden = false;
+      followNote.textContent = m.to !== null
+        ? `Following the lineage: #${m.from} died, now watching its ${m.relation} #${m.to}.`
+        : `#${m.from} died, and no close relatives are alive.`;
+      break;
     case "export": {
       const r = m.run;
       const name = r.format === "evomind-natural"
@@ -504,6 +594,10 @@ for (const [btn, labN, natN] of [[skip10, 10, 10_000], [skip100, 100, 100_000]] 
   });
 }
 colorSel.addEventListener("change", () => (colorMode = colorSel.value as ColorMode));
+foodSel.addEventListener("change", () => {
+  send({ t: "env", foodBoost: Number(foodSel.value) });
+  toast(`Food supply set to ${foodSel.value}× from now on.`);
+});
 $("save").addEventListener("click", () => send({ t: "export" }));
 $("csv").addEventListener("click", () => {
   if (natural()) {
@@ -534,6 +628,25 @@ document.addEventListener("keydown", (e) => {
     togglePlay();
   }
 });
+
+function setSidebar(open: boolean): void {
+  appEl.classList.toggle("no-sidebar", !open);
+  sidebarBtn.classList.toggle("toggled", open);
+  sidebarBtn.setAttribute("aria-expanded", String(open));
+  try {
+    localStorage.setItem("evomind.sidebar", open ? "1" : "0");
+  } catch {
+    // storage unavailable: just don't remember
+  }
+}
+let sidebarPref: string | null = null;
+try {
+  sidebarPref = localStorage.getItem("evomind.sidebar");
+} catch {
+  sidebarPref = null;
+}
+setSidebar(sidebarPref !== null ? sidebarPref === "1" : window.innerWidth >= 1280);
+sidebarBtn.addEventListener("click", () => setSidebar(appEl.classList.contains("no-sidebar")));
 
 send({ t: "reset", config });
 applyMode();

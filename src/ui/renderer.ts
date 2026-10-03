@@ -1,6 +1,7 @@
 import {
-  CREATURE_STRIDE, C_AGE, C_ALIVE, C_ENERGY, C_FAMILY, C_HEADING, C_ID, C_RELATIVE, C_SIZE, C_X, C_Y, type WorldSnap,
+  CREATURE_STRIDE, C_AGE, C_ALIVE, C_ENERGY, C_HEADING, C_ID, C_MAXSPEED, C_RELATIVE, C_SENSOR, C_SIZE, C_X, C_Y, type WorldSnap,
 } from "../worker/protocol";
+import { sampleGrid } from "../sim/food";
 
 // Creatures use hues 0-190 (red -> cyan) for energy, so food takes pink, outside that range.
 const FOOD_COLOR = "#f472b6";
@@ -10,12 +11,26 @@ const SENSE_COLOR = "rgba(57, 135, 229, 0.8)";
 /** Newborns get an expanding, fading ring for this many ticks. */
 const BIRTH_FLASH_TICKS = 40;
 
-/** How creatures are coloured: by energy (red→cyan) or by family (clan). */
-export type ColorMode = "energy" | "family";
+/** How creatures are coloured: by energy (red→cyan), or by a trait on a one-hue ramp. */
+export type ColorMode = "energy" | "age" | "size" | "speed" | "sensor";
 
-/** Stable, well-spread hue per family id; skips 290-360 so families never look like (pink) food. */
-function familyHue(family: number): number {
-  return (Math.abs(family) * 137.508) % 290;
+/** Snapshot offset holding each colourable trait. */
+const TRAIT_OFFSET: Record<Exclude<ColorMode, "energy">, number> = {
+  age: C_AGE,
+  size: C_SIZE,
+  speed: C_MAXSPEED,
+  sensor: C_SENSOR,
+};
+
+/** Range used for the current trait colouring (for the legend), or null in energy mode. */
+export interface ColorRange {
+  min: number;
+  max: number;
+}
+
+/** One-hue (amber) ramp, dim → bright, so "more" always reads as "brighter". Amber stays clear of pink food. */
+export function traitColor(t: number): string {
+  return `hsl(38, ${(55 + 35 * t).toFixed(0)}%, ${(30 + 50 * t).toFixed(0)}%)`;
 }
 
 function torusDelta(a: number, b: number, size: number): number {
@@ -32,6 +47,8 @@ export class Renderer {
   private cssW = 0;
   private worldW = 0;
   private worldH = 0;
+  /** Cached fertility tint (rebuilt only when the grid changes). */
+  private ground: { key: string; canvas: HTMLCanvasElement } | null = null;
 
   constructor(readonly canvas: HTMLCanvasElement) {
     const ctx = canvas.getContext("2d");
@@ -58,6 +75,30 @@ export class Renderer {
     this.scale = (cssW * dpr) / snap.width;
   }
 
+  private groundImage(f: NonNullable<WorldSnap["fertility"]>): HTMLCanvasElement {
+    const key = `${f.cols}x${f.rows}:${f.values.join(",")}`;
+    if (this.ground?.key === key) return this.ground.canvas;
+    const W = 96, H = 72;
+    const canvas = document.createElement("canvas");
+    canvas.width = W;
+    canvas.height = H;
+    const g = canvas.getContext("2d")!;
+    const img = g.createImageData(W, H);
+    for (let y = 0; y < H; y++) {
+      for (let x = 0; x < W; x++) {
+        const v = sampleGrid(f.values, f.cols, f.rows, (x + 0.5) / W, (y + 0.5) / H);
+        const o = (y * W + x) * 4;
+        img.data[o] = 40;
+        img.data[o + 1] = 120;
+        img.data[o + 2] = 60;
+        img.data[o + 3] = Math.round(v * v * 70); // squared: barren ground stays dark
+      }
+    }
+    g.putImageData(img, 0, 0);
+    this.ground = { key, canvas };
+    return canvas;
+  }
+
   /** Mouse event -> world coordinates. */
   toWorld(ev: MouseEvent): { x: number; y: number } {
     const rect = this.canvas.getBoundingClientRect();
@@ -73,13 +114,23 @@ export class Renderer {
     sense: { x: number; y: number } | null,
     sensorRange: number = snap.sensorRange,
     colorMode: ColorMode = "energy",
-  ): void {
+    /** 0..1 strength of the fertile-ground tint (fades in lean seasons). */
+    groundStrength = 1,
+  ): ColorRange | null {
     this.fit(snap);
     const { ctx, scale } = this;
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
     ctx.setTransform(scale, 0, 0, scale, 0, 0);
     const px = 1 / scale * (window.devicePixelRatio || 1);
+
+    // Fertile ground: a faint green tint, smooth because it's upscaled from a small image.
+    if (snap.fertility) {
+      ctx.imageSmoothingEnabled = true;
+      ctx.globalAlpha = Math.max(0.15, Math.min(1, groundStrength));
+      ctx.drawImage(this.groundImage(snap.fertility), 0, 0, snap.width, snap.height);
+      ctx.globalAlpha = 1;
+    }
 
     // Food
     ctx.fillStyle = FOOD_COLOR;
@@ -91,6 +142,21 @@ export class Renderer {
     }
 
     const cr = snap.creatures;
+
+    // Trait colouring: scale to the living population's own min..max for contrast.
+    let range: ColorRange | null = null;
+    if (colorMode !== "energy") {
+      const off = TRAIT_OFFSET[colorMode];
+      let min = Infinity, max = -Infinity;
+      for (let i = 0; i < snap.count; i++) {
+        const o = i * CREATURE_STRIDE;
+        if (!cr[o + C_ALIVE]) continue;
+        min = Math.min(min, cr[o + off]);
+        max = Math.max(max, cr[o + off]);
+      }
+      if (min <= max) range = { min, max };
+    }
+
     let selected: number | null = null;
     if (selectedId !== null) {
       for (let i = 0; i < snap.count; i++) if (cr[i * CREATURE_STRIDE + C_ID] === selectedId) selected = i;
@@ -122,11 +188,12 @@ export class Renderer {
       const o = i * CREATURE_STRIDE;
       if (!cr[o + C_ALIVE]) continue;
       const x = cr[o + C_X], y = cr[o + C_Y], e = cr[o + C_ENERGY], s = cr[o + C_SIZE] || 1;
-      const fam = cr[o + C_FAMILY];
-      ctx.fillStyle =
-        colorMode === "family" && fam >= 0
-          ? `hsl(${familyHue(fam).toFixed(0)}, 70%, ${42 + e * 20}%)`
-          : `hsl(${Math.round(e * 190)}, 80%, ${45 + e * 15}%)`;
+      if (range && colorMode !== "energy") {
+        const v = cr[o + TRAIT_OFFSET[colorMode]];
+        ctx.fillStyle = traitColor(range.max > range.min ? (v - range.min) / (range.max - range.min) : 0.5);
+      } else {
+        ctx.fillStyle = `hsl(${Math.round(e * 190)}, 80%, ${45 + e * 15}%)`;
+      }
       ctx.save();
       ctx.translate(x, y);
       ctx.rotate(cr[o + C_HEADING]);
@@ -158,6 +225,7 @@ export class Renderer {
         ctx.stroke();
       }
     }
+    return range;
   }
 
   /** Id of the living creature nearest to a click (within 15 world px), or null. */

@@ -12,10 +12,20 @@
         <h1>EvoMind</h1>
         <span class="tagline">Neural creatures evolving by natural selection</span>
       </div>
-      <span id="status" class="status">Starting…</span>
+      <div class="top-right">
+        <span id="season" class="season" hidden title="Season: plant growth rises in summer and falls in winter">
+          <i class="season-dot"></i>
+          <span id="season-text">Spring · year 1</span>
+          <span class="season-bar" aria-hidden="true"><b id="season-fill"></b></span>
+        </span>
+        <span id="status" class="status">Starting…</span>
+      </div>
     </header>
 
     <nav class="toolbar" aria-label="Simulation controls">
+      <div class="group">
+        <button id="sidebar-toggle" title="Show or hide the settings sidebar" aria-controls="sidebar">Settings</button>
+      </div>
       <div class="group">
         <button id="play" class="primary" title="Pause or resume the simulation (Space)">Pause</button>
         <button id="step" title="Pause and advance exactly one tick: watch a brain react frame by frame">Step</button>
@@ -30,15 +40,27 @@
         </label>
       </div>
       <div class="group segmented" role="tablist" aria-label="View">
-        <button data-scene="evolve" class="active" role="tab" title="Watch the evolving population live">Evolve</button>
+        <button data-scene="evolve" class="active" role="tab" title="Watch the population live">Evolve</button>
         <button data-scene="best" role="tab" title="The best-ever brain alone in a fresh world">Watch best</button>
-        <button data-scene="compare" role="tab" title="Random generation-0 brains vs today&rsquo;s brains on the identical world">Gen 0 vs now</button>
+        <button data-scene="compare" role="tab" title="Random brains vs today&rsquo;s brains on the identical world">Gen 0 vs now</button>
       </div>
       <div class="group">
-        <label class="inline" title="Colour creatures by energy, or by family (clan of a shared ancestor 8 generations back)">Colour
+        <label class="inline" id="food-ctl" title="Environment shift: change the food supply from now on, without restarting">Food
+          <select id="food-boost">
+            <option value="0.25">0.25&times;</option>
+            <option value="0.5">0.5&times;</option>
+            <option value="1" selected>1&times;</option>
+            <option value="1.5">1.5&times;</option>
+            <option value="2">2&times;</option>
+          </select>
+        </label>
+        <label class="inline" title="Colour creatures by energy (red = starving, cyan = full), or by a trait (dim = low, bright = high)">Colour
           <select id="color">
             <option value="energy">Energy</option>
-            <option value="family">Family</option>
+            <option value="size">Size</option>
+            <option value="speed">Max speed</option>
+            <option value="sensor">Sensor range</option>
+            <option value="age">Age</option>
           </select>
         </label>
       </div>
@@ -49,82 +71,88 @@
       </div>
     </nav>
 
-    <main class="layout">
-      <div class="tiles">
-        <div class="tile hero"><div id="l0" class="tile-label">Generation</div><div id="t0" class="tile-value">0</div></div>
-        <div class="tile"><div id="l1" class="tile-label"></div><div id="t1" class="tile-value">–</div></div>
-        <div class="tile"><div id="l2" class="tile-label"></div><div id="t2" class="tile-value">–</div></div>
-        <div class="tile"><div id="l3" class="tile-label"></div><div id="t3" class="tile-value">–</div></div>
-        <div class="tile"><div id="l4" class="tile-label"></div><div id="t4" class="tile-value">–</div></div>
-        <div class="tile"><div id="l5" class="tile-label"></div><div id="t5" class="tile-value">–</div></div>
-      </div>
-
-      <div class="main-row">
-        <section id="stage" class="stage"></section>
-        <aside class="side">
-          <div class="panel">
-            <h2>Selected creature</h2>
-            <div id="inspector"><p class="muted">Click a creature in the world.</p></div>
-          </div>
-          <div class="panel">
-            <h2>Brain</h2>
-            <div class="brain-wrap"><canvas id="brain"></canvas></div>
-            <p class="hint">Lines are weights (blue +, red &minus;, thicker = stronger). Circles light up with activity.</p>
-          </div>
-        </aside>
-      </div>
-
-      <div id="lab-charts" class="charts">
-        <div id="c-fitness"></div>
-        <div id="c-align"></div>
-        <div id="c-surv"></div>
-        <div id="c-div"></div>
-      </div>
-
-      <div id="nat-charts" class="charts">
-        <div id="c-pop"></div>
-        <div id="c-births"></div>
-        <div id="c-lab"></div>
-        <div id="c-gen"></div>
-        <div id="c-nalign"></div>
-        <div id="c-ndiv"></div>
-      </div>
-
-      <section id="life-section" class="body-section">
-        <div class="section-title">Life history <span class="muted-inline">· when to breed, and how much to give each child (r/K strategy)</span></div>
-        <div class="charts">
-          <div id="c-thresh"></div>
-          <div id="c-share"></div>
-        </div>
-      </section>
-
-      <section id="body-section" class="body-section">
-        <div class="section-title">Body evolution <span class="muted-inline">· line = population average, band = spread (±1 sd)</span></div>
-        <div class="charts four">
-          <div id="c-speed"></div>
-          <div id="c-sensor"></div>
-          <div id="c-size"></div>
-          <div id="c-turn"></div>
-        </div>
-      </section>
-
-      <div class="bottom-row">
-        <details class="panel" id="settings-panel">
-          <summary><h2>Settings</h2></summary>
+    <div id="app" class="app">
+      <aside id="sidebar" class="sidebar" aria-label="Settings">
+        <div class="panel">
+          <h2>Settings</h2>
           <form id="settings" class="settings"></form>
-        </details>
+        </div>
         <div class="panel">
           <h2>Data</h2>
           <div class="data-buttons">
-            <button id="save" title="Download the whole run (settings, history, brains) as JSON">Save run</button>
+            <button id="save" title="Download the whole run as JSON">Save run</button>
             <button id="load" title="Load a saved run, or a best.json from npm run evolve">Load…</button>
-            <button id="csv" title="Download per-generation stats as CSV">History CSV</button>
+            <button id="csv" title="Download the stats history as CSV">History CSV</button>
           </div>
           <input id="file" type="file" accept=".json,application/json" hidden />
           <p class="hint">Load accepts a saved run or a <code>best.json</code> from <code>npm run evolve</code>.</p>
         </div>
-      </div>
-    </main>
+      </aside>
+
+      <main class="layout">
+        <div class="tiles">
+          <div class="tile hero"><div id="l0" class="tile-label">Generation</div><div id="t0" class="tile-value">0</div></div>
+          <div class="tile"><div id="l1" class="tile-label"></div><div id="t1" class="tile-value">–</div></div>
+          <div class="tile"><div id="l2" class="tile-label"></div><div id="t2" class="tile-value">–</div></div>
+          <div class="tile"><div id="l3" class="tile-label"></div><div id="t3" class="tile-value">–</div></div>
+          <div class="tile"><div id="l4" class="tile-label"></div><div id="t4" class="tile-value">–</div></div>
+          <div class="tile"><div id="l5" class="tile-label"></div><div id="t5" class="tile-value">–</div></div>
+        </div>
+
+        <div class="main-row">
+          <section id="stage" class="stage"></section>
+          <aside class="side">
+            <div class="panel">
+              <h2>Selected creature</h2>
+              <div id="follow-note" class="follow-note" hidden></div>
+              <div id="inspector"><p class="muted">Click a creature in the world.</p></div>
+            </div>
+            <div class="panel">
+              <h2>Brain</h2>
+              <div class="brain-wrap"><canvas id="brain"></canvas></div>
+              <p class="hint">Lines are weights (blue +, red &minus;, thicker = stronger). Circles light up with activity.</p>
+            </div>
+          </aside>
+        </div>
+
+        <div id="lab-charts" class="charts">
+          <div id="c-fitness"></div>
+          <div id="c-align"></div>
+          <div id="c-surv"></div>
+          <div id="c-div"></div>
+        </div>
+
+        <div id="nat-charts" class="charts three">
+          <div id="c-pop"></div>
+          <div id="c-births"></div>
+          <div id="c-lab"></div>
+          <div id="c-life"></div>
+          <div id="c-gen"></div>
+          <div id="c-nalign"></div>
+          <div id="c-cluster"></div>
+          <div id="c-foodmap"></div>
+          <div id="c-ndiv"></div>
+        </div>
+
+        <section id="life-section" class="body-section">
+          <div class="section-title">Life history <span class="muted-inline">· when to breed, and how much to give each child (r/K strategy)</span></div>
+          <div class="charts">
+            <div id="c-thresh"></div>
+            <div id="c-share"></div>
+          </div>
+        </section>
+
+        <section id="body-section" class="body-section">
+          <div class="section-title">Body evolution <span class="muted-inline">· line = population average, band = spread (±1 sd)</span></div>
+          <div class="charts four">
+            <div id="c-speed"></div>
+            <div id="c-sensor"></div>
+            <div id="c-size"></div>
+            <div id="c-turn"></div>
+          </div>
+        </section>
+      </main>
+    </div>
 
     <div id="toast" class="toast" role="status" hidden></div>
     <script type="module" src="/src/ui/main.ts"></script>

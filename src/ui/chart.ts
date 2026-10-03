@@ -74,6 +74,8 @@ export class LineChart {
   private w = 0;
   private dirty = true;
   private subEl: HTMLDivElement | null = null;
+  /** Rows where row[shadeKey] === 1 get a background band (e.g. the lean season). */
+  private shadeKey: string | null = null;
 
   constructor(host: HTMLElement, private opts: ChartOptions) {
     host.classList.add("chart");
@@ -141,6 +143,13 @@ export class LineChart {
     }
   }
 
+  setShade(key: string | null): void {
+    if (key !== this.shadeKey) {
+      this.shadeKey = key;
+      this.dirty = true;
+    }
+  }
+
   setEmptyText(text: string): void {
     this.empty.textContent = text;
   }
@@ -196,6 +205,23 @@ export class LineChart {
     this.empty.hidden = this.data.length > 0;
     if (!this.data.length) return;
     const { x0, x1, lo, hi, step, sx, sy } = this.scales();
+
+    // Shaded spans (e.g. winters), behind everything else
+    if (this.shadeKey) {
+      const key = this.shadeKey, d = this.data;
+      ctx.fillStyle = "rgba(57, 135, 229, 0.07)";
+      let start: number | null = null;
+      for (let i = 0; i <= d.length; i++) {
+        const on = i < d.length && d[i][key] === 1;
+        if (on && start === null) start = i;
+        if (!on && start !== null) {
+          const xa = sx(d[Math.max(0, start - 1)][this.xKey]);
+          const xb = sx(d[Math.min(d.length - 1, i - 1)][this.xKey]);
+          ctx.fillRect(xa, PAD.top, Math.max(1, xb - xa), HEIGHT - PAD.top - PAD.bottom);
+          start = null;
+        }
+      }
+    }
 
     // Grid + y ticks
     ctx.font = "11px system-ui, -apple-system, 'Segoe UI', sans-serif";

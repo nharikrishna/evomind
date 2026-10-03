@@ -13,14 +13,16 @@ import type { BrainShape } from "../brain/genome";
 export type SceneKind = "evolve" | "best" | "compare";
 
 /** Per-creature floats in WorldSnap.creatures. */
-export const CREATURE_STRIDE = 10;
+export const CREATURE_STRIDE = 11;
 export const C_X = 0, C_Y = 1, C_HEADING = 2, C_ENERGY = 3, C_ALIVE = 4, C_RELATIVE = 5, C_SIZE = 6,
   /** Stable creature id (populations change, so selection is by id, not index). */
   C_ID = 7,
-  /** Clan: the ancestor a few generations back, used for family colouring. */
-  C_FAMILY = 8,
-  /** Age in ticks (newborns get a brief birth flash). */
-  C_AGE = 9;
+  /** Body max speed (for colour-by-trait). */
+  C_MAXSPEED = 8,
+  /** Age in ticks (birth flash, colour-by-age). */
+  C_AGE = 9,
+  /** Body sensor range (for colour-by-trait). */
+  C_SENSOR = 10;
 
 export interface WorldSnap {
   label: string;
@@ -38,6 +40,8 @@ export interface WorldSnap {
   creatures: Float32Array;
   /** Active food as x, y pairs. */
   food: Float32Array;
+  /** Plant food model: coarse fertility grid (0..1), drawn as a ground tint. */
+  fertility: { cols: number; rows: number; values: number[] } | null;
 }
 
 export interface SelectedSnap {
@@ -77,6 +81,8 @@ export type ToWorker =
   | { t: "fast"; on: boolean; amount?: number }
   | { t: "scene"; scene: SceneKind }
   | { t: "select"; view: number; id: number | null }
+  /** Environment shift (natural mode): multiply the food supply from now on. */
+  | { t: "env"; foodBoost: number }
   | { t: "export" }
   | { t: "import"; data: unknown };
 
@@ -100,6 +106,8 @@ export type FromWorker =
   // Both
   | { t: "fast"; on: boolean; generation: number }
   | { t: "scene"; scene: SceneKind }
+  /** The selected creature died; the selection moved to a relative (natural mode). */
+  | { t: "follow"; from: number; to: number | null; relation: string }
   | { t: "export"; run: RunFile | NaturalRunFile }
   | { t: "info"; message: string }
   | { t: "error"; message: string };

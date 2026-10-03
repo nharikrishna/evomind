@@ -10,6 +10,9 @@ import { traitStats, type TraitStats } from "../analysis/metrics";
 import { EvaluationJob } from "../analysis/baselines";
 import { genomeFromJSON, genomeToJSON } from "../analysis/history";
 import { mutate } from "./mutation";
+import { clarkEvans } from "../sim/food";
+import { seasonFactor, seasonInfo } from "../sim/seasons";
+import { BIOMES } from "../sim/biomes";
 import type { LineageEntry } from "./generation";
 
 /**
@@ -27,6 +30,8 @@ export interface NaturalStats extends TraitStats {
   births: number;
   deaths: number;
   meanAge: number;
+  /** Mean age at death of creatures that died since the previous sample (0 if none). */
+  meanLifespan: number;
   /** Mean energy as a fraction of each creature's store. */
   meanEnergy: number;
   /** Mean / max generations of descent from the founders. */
@@ -39,6 +44,19 @@ export interface NaturalStats extends TraitStats {
   reproThresholdMean: number; reproThresholdSd: number;
   offspringShareMean: number; offspringShareSd: number;
   foodOnMap: number;
+  /** Clark–Evans index of standing food: ≈1 random scatter, <1 patchy. */
+  foodClustering: number;
+  /** Current regrowth multiplier from the season (1 = no seasons). */
+  seasonFactor: number;
+  /** 1 during the lean half of the year (shaded on charts), else 0. */
+  lean: number;
+  /** Environment-shift food multiplier in effect. */
+  foodBoost: number;
+  /** Per biome (index = BIOMES order): creatures there now and their mean traits (0 if empty). */
+  biomePop: number[];
+  biomeSize: number[];
+  biomeSpeed: number[];
+  biomeSensor: number[];
   extinctions: number;
 }
 
@@ -112,6 +130,7 @@ export class NaturalEvolution {
   private labJobs: LabJob[] = [];
   private windowBirths = 0;
   private windowDeaths = 0;
+  private windowDeathAge = 0;
 
   constructor(readonly config: SimConfig, seedGenomes?: Genome[]) {
     this.rng = new Rng(deriveSeed(config.seed, 0x9a7));
@@ -161,7 +180,10 @@ export class NaturalEvolution {
   step(): void {
     const cfg = this.config;
     step(this.world);
-    this.windowDeaths += removeDead(this.world).length;
+    for (const d of removeDead(this.world)) {
+      this.windowDeaths++;
+      this.windowDeathAge += d.age;
+    }
 
     const n = this.world.creatures.length;
     for (let i = 0; i < n; i++) {
@@ -224,12 +246,8 @@ export class NaturalEvolution {
 
     const cg = this.mutatedCopy(pg);
     this.lineage.set(cg.id, { parentId: pg.id, generation: cg.generation, founder: this.founderOf(pg.id) });
-    const child = newCreature(
-      this.world,
-      wrapCoord(parent.x + this.rng.gaussian() * 6, cfg.width),
-      wrapCoord(parent.y + this.rng.gaussian() * 6, cfg.height),
-      this.rng.range(-Math.PI, Math.PI),
-    );
+    const pos = this.birthPosition(parent.x, parent.y);
+    const child = newCreature(this.world, pos.x, pos.y, this.rng.range(-Math.PI, Math.PI));
     attachGenome(child, cg, cfg);
     child.energy = give * cfg.birthEfficiency;
     addCreature(this.world, child, new NeuralController(cg));
@@ -240,6 +258,22 @@ export class NaturalEvolution {
     if (!this.champion || kids > this.champion.children) this.champion = { genome: pg, children: kids };
     if (this.bank.length >= BANK_SIZE) this.bank.shift();
     this.bank.push(pg);
+  }
+
+  /**
+   * Children appear right next to the parent, and on the parent's side of any
+   * biome barrier (otherwise births would leak across walls).
+   */
+  private birthPosition(px: number, py: number): { x: number; y: number } {
+    const cfg = this.config;
+    const map = this.world.biomeMap;
+    const home = map ? map.at(px, py) : -1;
+    for (let t = 0; t < 4; t++) {
+      const x = wrapCoord(px + this.rng.gaussian() * 6, cfg.width);
+      const y = wrapCoord(py + this.rng.gaussian() * 6, cfg.height);
+      if (!map || cfg.biomeCrossing >= 1 || map.at(x, y) === home) return { x, y };
+    }
+    return { x: px, y: py };
   }
 
   /** Everyone died: restart the population from recent successful parents (or randoms). */
@@ -288,6 +322,7 @@ export class NaturalEvolution {
       births: this.windowBirths,
       deaths: this.windowDeaths,
       meanAge: age / n,
+      meanLifespan: this.windowDeaths ? this.windowDeathAge / this.windowDeaths : 0,
       meanEnergy: energy / n,
       meanGeneration: gen / n,
       maxGeneration: maxGen,
@@ -297,10 +332,34 @@ export class NaturalEvolution {
       ...traitStats(genomes, cfg),
       reproThresholdMean, reproThresholdSd, offspringShareMean, offspringShareSd,
       foodOnMap: this.world.food.reduce((s, f) => s + (f.active ? 1 : 0), 0),
+      foodClustering: (() => {
+        const act = this.world.food.filter((f) => f.active);
+        return clarkEvans(act.map((f) => f.x), act.map((f) => f.y), cfg.width, cfg.height);
+      })(),
+      seasonFactor: seasonFactor(cfg, this.world.tick),
+      lean: seasonInfo(cfg, this.world.tick)?.lean ? 1 : 0,
+      foodBoost: this.world.foodBoost,
+      ...this.biomeStats(),
       extinctions: this.extinctions,
     });
     this.windowBirths = 0;
     this.windowDeaths = 0;
+    this.windowDeathAge = 0;
+  }
+
+  private biomeStats(): Pick<NaturalStats, "biomePop" | "biomeSize" | "biomeSpeed" | "biomeSensor"> {
+    const k = BIOMES.length;
+    const pop = new Array<number>(k).fill(0), size = new Array<number>(k).fill(0);
+    const speed = new Array<number>(k).fill(0), sensor = new Array<number>(k).fill(0);
+    for (const c of this.world.creatures) {
+      if (c.biome < 0) continue;
+      pop[c.biome]++;
+      size[c.biome] += c.body.size;
+      speed[c.biome] += c.body.maxSpeed;
+      sensor[c.biome] += c.body.sensorRange;
+    }
+    const mean = (a: number[]) => a.map((v, b) => (pop[b] ? v / pop[b] : 0));
+    return { biomePop: pop, biomeSize: mean(size), biomeSpeed: mean(speed), biomeSensor: mean(sensor) };
   }
 
   /**
@@ -309,8 +368,12 @@ export class NaturalEvolution {
    * whose own food settings differ.
    */
   private labConfig(): SimConfig {
-    const { foodCount, foodEnergy, respawnRate, episodeTicks } = DEFAULT_CONFIG;
-    return { ...this.config, mode: "lab", creatureCount: LAB_TEST_SIZE, foodCount, foodEnergy, respawnRate, episodeTicks, agingScale: 0 };
+    const { foodCount, foodEnergy, respawnRate, episodeTicks, foodModel } = DEFAULT_CONFIG;
+    return {
+      ...this.config, mode: "lab", creatureCount: LAB_TEST_SIZE,
+      foodCount, foodEnergy, respawnRate, episodeTicks, foodModel,
+      agingScale: 0, seasonLength: 0, biomes: false,
+    };
   }
 
   /**

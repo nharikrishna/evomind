@@ -2,6 +2,9 @@
 /** lab = generational (we score and pick parents); natural = creatures reproduce on their own. */
 export type SimMode = "lab" | "natural";
 
+/** random = food reappears anywhere; plants = sprouts near other plants, on fertile ground. */
+export type FoodModel = "random" | "plants";
+
 export interface SimConfig {
   mode: SimMode;
   seed: number;
@@ -16,8 +19,41 @@ export interface SimConfig {
   // Food
   foodCount: number;
   foodEnergy: number;
-  /** Per-tick probability that an eaten food item respawns somewhere random. */
+  /** Per-tick probability that an eaten food item regrows. */
   respawnRate: number;
+  foodModel: FoodModel;
+  /** Plants: size (px) of fertility patches. */
+  fertilityScale: number;
+  /** Plants: how extreme fertility is (higher = starker rich vs barren ground). */
+  fertilityContrast: number;
+  /** Plants: fertility floor, so no ground is completely dead. */
+  minFertility: number;
+  /** Plants: chance a new plant sprouts near an existing one (else anywhere: long-distance seed). */
+  seedLocalProb: number;
+  /** Plants: typical seed dispersal distance (px). */
+  seedSpread: number;
+  /** Ticks per year (0 = no seasons). */
+  seasonLength: number;
+  /** Regrowth swings between 1 ± this over the year (0.8 = summer 1.8×, winter 0.2×). */
+  seasonAmplitude: number;
+
+  // Biomes (Phase 6c)
+  biomes: boolean;
+  /** Number of Voronoi regions (each one of the 4 biomes). */
+  biomeRegions: number;
+  /** Brains get 4 inputs saying which biome they're in. */
+  biomeSense: boolean;
+  /** Tundra: extra upkeep per tick per unit of body size (heat lost through the surface). */
+  coldCost: number;
+  /** Swamp: movement cost multiplier. */
+  mudFactor: number;
+  /** Forest: sensor range multiplier. */
+  fogFactor: number;
+  /**
+   * Chance per attempt that a creature can cross into a different biome
+   * (1 = free movement, 0 = impassable walls). Models barriers like rivers or ridges.
+   */
+  biomeCrossing: number;
 
   // Creature body
   maxEnergy: number;
@@ -112,6 +148,22 @@ export const DEFAULT_CONFIG: SimConfig = {
   foodCount: 60,
   foodEnergy: 40,
   respawnRate: 0.02,
+  foodModel: "random",
+  fertilityScale: 160,
+  fertilityContrast: 2.5,
+  minFertility: 0.05,
+  seedLocalProb: 0.95,
+  seedSpread: 30,
+  seasonLength: 0,
+  seasonAmplitude: 0.8,
+
+  biomes: false,
+  biomeRegions: 8,
+  biomeSense: false,
+  coldCost: 0.03,
+  mudFactor: 2.5,
+  fogFactor: 0.5,
+  biomeCrossing: 1,
 
   maxEnergy: 100,
   initialEnergy: 60,
@@ -186,6 +238,10 @@ export const REALISM_PRESET: Partial<SimConfig> = {
 export const NATURAL_PRESET: Partial<SimConfig> = {
   ...REALISM_PRESET,
   mode: "natural",
+  foodModel: "plants",
+  // Tuned: visible boom/bust with no extinctions on 3 seeds (±0.8 or 20k-tick years wiped populations out).
+  seasonLength: 5000,
+  seasonAmplitude: 0.6,
   agingScale: 3000,
   respawnRate: 0.01,
   // Pure safety net: efficiency keeps evolving, and a 300k-tick run crept up to ~540.

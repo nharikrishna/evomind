@@ -6,7 +6,7 @@ import { PREY_SENSORS } from "../sim/sensors";
 import type { Genome } from "../brain/genome";
 import { attachGenome, NeuralController } from "../brain/neuralController";
 import { randomPopulation } from "../brain/population";
-import { runEpisode } from "../evo/generation";
+import { createWorld, isEpisodeOver, step, type World } from "../sim/world";
 import { preyFitness } from "../evo/fitness";
 import { episodeMetrics } from "./metrics";
 
@@ -39,29 +39,75 @@ export interface EvalResult {
 }
 
 /**
- * Mean fitness of a population over several unseen worlds, optionally with some
- * senses blinded. Seeds are disjoint from any training seed.
+ * An evaluation that can run in slices (`advance`) so a long test never blocks
+ * the simulation, or all at once (`runToEnd`). Runs `episodes` unseen worlds
+ * (seeds disjoint from any training seed), optionally with some senses blinded.
  */
+export class EvaluationJob {
+  private zeroed: number[];
+  private episode = 0;
+  private world: World | null = null;
+  private fit = 0;
+  private food = 0;
+  private align = 0;
+  result: EvalResult | null = null;
+
+  constructor(
+    private config: SimConfig,
+    private genomes: readonly Genome[],
+    private episodes: number,
+    blind: readonly SensorName[] = [],
+  ) {
+    this.zeroed = blind.map((s) => PREY_SENSORS.indexOf(s));
+  }
+
+  get done(): boolean {
+    return this.result !== null;
+  }
+
+  /** Simulate up to `ticks` test-world ticks. Returns true once finished. */
+  advance(ticks: number): boolean {
+    const { genomes, config } = this;
+    for (let t = 0; t < ticks && !this.result; t++) {
+      if (!this.world) {
+        const seed = deriveSeed(config.seed, 0x7e57, this.episode);
+        this.world = createWorld({ ...config, seed, creatureCount: genomes.length }, (creature, i, _rng, cfg) => {
+          attachGenome(creature, genomes[i], cfg);
+          const nc = new NeuralController(genomes[i]);
+          return this.zeroed.length ? new AblatedController(nc, this.zeroed) : nc;
+        });
+      }
+      if (!isEpisodeOver(this.world)) {
+        step(this.world);
+        continue;
+      }
+      const cs = this.world.creatures;
+      this.fit += cs.reduce((s, c) => s + preyFitness(c, config), 0) / genomes.length;
+      this.food += cs.reduce((s, c) => s + c.foodEaten, 0) / genomes.length;
+      this.align += episodeMetrics(cs).alignment;
+      this.world = null;
+      if (++this.episode >= this.episodes) {
+        const n = this.episodes;
+        this.result = { meanFitness: this.fit / n, meanFood: this.food / n, alignment: this.align / n };
+      }
+    }
+    return this.done;
+  }
+
+  runToEnd(): EvalResult {
+    while (!this.advance(10_000));
+    return this.result!;
+  }
+}
+
+/** Evaluate a population all at once (see EvaluationJob). */
 export function evaluate(
   config: SimConfig,
   genomes: readonly Genome[],
   episodes: number,
   blind: readonly SensorName[] = [],
 ): EvalResult {
-  const zeroed = blind.map((s) => PREY_SENSORS.indexOf(s));
-  let fit = 0, food = 0, align = 0;
-  for (let e = 0; e < episodes; e++) {
-    const seed = deriveSeed(config.seed, 0x7e57, e);
-    const world = runEpisode(config, genomes, seed, (creature, i, _rng, cfg) => {
-      attachGenome(creature, genomes[i], cfg);
-      const nc = new NeuralController(genomes[i]);
-      return zeroed.length ? new AblatedController(nc, zeroed) : nc;
-    });
-    fit += world.creatures.reduce((s, c) => s + preyFitness(c, config), 0) / genomes.length;
-    food += world.creatures.reduce((s, c) => s + c.foodEaten, 0) / genomes.length;
-    align += episodeMetrics(world.creatures).alignment;
-  }
-  return { meanFitness: fit / episodes, meanFood: food / episodes, alignment: align / episodes };
+  return new EvaluationJob(config, genomes, episodes, blind).runToEnd();
 }
 
 export interface ProofReport {

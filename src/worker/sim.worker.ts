@@ -1,18 +1,23 @@
 /// <reference lib="webworker" />
 /**
  * Owns the simulation so the page never blocks. The UI pulls frames (one per
- * animation frame) in watch mode; in fast-forward the worker evolves flat out
- * and only reports per-generation stats.
+ * animation frame); in fast-forward the worker runs flat out and only reports
+ * stats. Hosts either engine:
+ * - lab:     generational Evolution (we score, we pick parents)
+ * - natural: NaturalEvolution (creatures reproduce on their own)
  */
-import type { SimConfig } from "../sim/config";
+import { DEFAULT_CONFIG, type SimConfig } from "../sim/config";
 import { deriveSeed } from "../sim/rng";
 import { aliveCount, createWorld, isEpisodeOver, step, type World } from "../sim/world";
+import { decodeRepro } from "../sim/lifeHistory";
 import type { Genome } from "../brain/genome";
 import { NeuralController, neuralFactory } from "../brain/neuralController";
-import { Evolution, runToEnd, type RunFile } from "../evo/generation";
+import { randomPopulation } from "../brain/population";
+import { Evolution, runToEnd, type LineageEntry, type RunFile } from "../evo/generation";
+import { NaturalEvolution, type NaturalRunFile } from "../evo/natural";
 import { genomeFromJSON } from "../analysis/history";
 import {
-  CREATURE_STRIDE, C_ALIVE, C_ENERGY, C_HEADING, C_RELATIVE, C_SIZE, C_X, C_Y,
+  CREATURE_STRIDE, C_AGE, C_ALIVE, C_ENERGY, C_FAMILY, C_HEADING, C_ID, C_RELATIVE, C_SIZE, C_X, C_Y,
   type FromWorker, type SceneKind, type SelectedSnap, type ToWorker, type WorldSnap,
 } from "./protocol";
 
@@ -20,6 +25,8 @@ declare const self: DedicatedWorkerGlobalScope;
 
 /** Generations of descent that define "relatives" (shared great-grandparent). */
 const RELATIVE_DEPTH = 3;
+/** Generations of descent that define a "clan" for family colouring. */
+const CLAN_DEPTH = 8;
 const ANCESTRY_SHOWN = 8;
 
 interface View {
@@ -27,33 +34,66 @@ interface View {
   world: World;
 }
 
-let evo: Evolution;
-let evoWorld: World;
+/** The lineage queries both engines provide. */
+interface Lineage {
+  lineage: Map<number, LineageEntry>;
+  ancestry(id: number, max?: number): number[];
+  ancestorAt(id: number, depth: number): number;
+}
+
+let evo: Evolution | null = null;
+let nat: NaturalEvolution | null = null;
+let evoWorld: World | null = null;
 let scene: SceneKind = "evolve";
 let views: View[] = [];
 let sceneEpisode = 0;
-let selected: { view: number; index: number } | null = null;
+let selected: { view: number; id: number } | null = null;
 let fast = false;
 let fastTarget: number | null = null;
-/** A genome loaded from a file for replay (overrides best-ever in the "best" scene). */
+/** A genome loaded from a file for replay (overrides the best-ever in the "best" scene). */
 let replay: { genome: Genome; config: SimConfig; label: string } | null = null;
+let sentStats = 0;
+let sentLab = 0;
 
 const post = (msg: FromWorker, transfer: Transferable[] = []) => self.postMessage(msg, transfer);
+const lineageSrc = (): Lineage => (nat ?? evo)!;
+const config = (): SimConfig => (nat ?? evo)!.config;
+/** Lab: generation. Natural: tick. */
+const progress = (): number => (nat ? nat.tick : evo!.generation);
 
-function reset(config: SimConfig, from?: Evolution): void {
-  stopFast();
-  evo = from ?? new Evolution(config);
-  evoWorld = evo.createEpisodeWorld(0);
-  selected = null;
-  setScene("evolve");
-  post({ t: "history", history: evo.history, config: evo.config, generation: evo.generation });
+function liveWorld(): World {
+  return nat ? nat.world : evoWorld!;
 }
 
+// ---------- setup ----------
+
+function reset(cfg: SimConfig, from?: Evolution | NaturalEvolution): void {
+  stopFast();
+  evo = null;
+  nat = null;
+  evoWorld = null;
+  selected = null;
+  if (from instanceof NaturalEvolution || (!from && cfg.mode === "natural")) {
+    nat = from instanceof NaturalEvolution ? from : new NaturalEvolution(cfg);
+    post({ t: "nhistory", stats: nat.stats, labScores: nat.labScores, labBaseline: nat.labBaseline, config: nat.config, tick: nat.tick });
+    sentStats = nat.stats.length;
+    sentLab = nat.labScores.length;
+  } else {
+    evo = from instanceof Evolution ? from : new Evolution(cfg);
+    evoWorld = evo.createEpisodeWorld(0);
+    post({ t: "history", history: evo.history, config: evo.config, generation: evo.generation });
+  }
+  setScene("evolve");
+}
+
+// ---------- lab bookkeeping ----------
+
 function finishGeneration(): void {
-  const worlds = [evoWorld];
-  for (let e = 1; e < evo.config.episodesPerGeneration; e++) worlds.push(runToEnd(evo.createEpisodeWorld(e)));
-  const stats = evo.completeGeneration(worlds);
-  evoWorld = evo.createEpisodeWorld(0);
+  const e = evo!;
+  const worlds = [evoWorld!];
+  for (let k = 1; k < e.config.episodesPerGeneration; k++) worlds.push(runToEnd(e.createEpisodeWorld(k)));
+  const stats = e.completeGeneration(worlds);
+  evoWorld = e.createEpisodeWorld(0);
   if (scene === "evolve") {
     views = [{ label: "", world: evoWorld }];
     selected = null;
@@ -61,37 +101,73 @@ function finishGeneration(): void {
   post({ t: "gen", stats });
 }
 
+// ---------- natural bookkeeping ----------
+
+/** Send any new natural stats samples / lab scores. */
+function flushNatural(): void {
+  if (!nat) return;
+  if (nat.stats.length === sentStats && nat.labScores.length === sentLab) return;
+  post({
+    t: "nstats",
+    stats: nat.stats.slice(sentStats),
+    labScores: nat.labScores.slice(sentLab),
+    labBaseline: nat.labBaseline,
+  });
+  sentStats = nat.stats.length;
+  sentLab = nat.labScores.length;
+}
+
 // ---------- scenes ----------
+
+/** A config turned into a plain (non-reproducing) test world with the standard lab food supply. */
+function labLike(cfg: SimConfig): SimConfig {
+  const { foodCount, foodEnergy, respawnRate, episodeTicks } = DEFAULT_CONFIG;
+  return { ...cfg, mode: "lab", agingScale: 0, foodCount, foodEnergy, respawnRate, episodeTicks };
+}
 
 function bestSource(): { genome: Genome; config: SimConfig; label: string } | null {
   if (replay) return replay;
-  if (!evo.bestEverGenome) return null;
-  const g = evo.bestEverGenome;
-  return { genome: g, config: evo.config, label: `Best ever: genome #${g.id} (fitness ${evo.bestEver.toFixed(0)})` };
+  if (nat) {
+    if (!nat.champion) return null;
+    const g = nat.champion.genome;
+    return { genome: g, config: labLike(nat.config), label: `Most prolific: genome #${g.id} (${nat.champion.children} children)` };
+  }
+  const e = evo!;
+  if (!e.bestEverGenome) return null;
+  const g = e.bestEverGenome;
+  return { genome: g, config: e.config, label: `Best ever: genome #${g.id} (fitness ${e.bestEver.toFixed(1)})` };
 }
 
 function buildSceneViews(): void {
-  const seed = deriveSeed(evo.config.seed, 0x5ce7e, sceneEpisode);
+  const cfg = config();
+  const seed = deriveSeed(cfg.seed, 0x5ce7e, sceneEpisode);
   if (scene === "evolve") {
-    views = [{ label: "", world: evoWorld }];
+    views = [{ label: "", world: liveWorld() }];
   } else if (scene === "best") {
     const src = bestSource();
     if (!src) {
       scene = "evolve";
-      views = [{ label: "", world: evoWorld }];
-      post({ t: "info", message: "No best organism yet. Let generation 0 finish first." });
+      views = [{ label: "", world: liveWorld() }];
+      post({ t: "info", message: nat ? "No births yet. Let the world run a little first." : "No best organism yet. Let generation 0 finish first." });
       post({ t: "scene", scene });
       return;
     }
     const world = createWorld({ ...src.config, seed, creatureCount: 1 }, neuralFactory([src.genome]));
     views = [{ label: src.label, world }];
-    selected = { view: 0, index: 0 };
+    selected = { view: 0, id: world.creatures[0].id };
   } else {
-    const gen0 = evo.initialPopulation();
-    const cfg = { ...evo.config, seed, creatureCount: evo.population.length };
+    const test = nat ? labLike(cfg) : cfg;
+    const current = nat ? nat.livingGenomes() : evo!.population;
+    const n = nat ? 100 : current.length;
+    const sample = Array.from({ length: n }, (_, k) => current[Math.floor((k * current.length) / n)]);
+    const gen0 = randomPopulation({ ...test, creatureCount: n });
+    const tcfg = { ...test, seed, creatureCount: n };
     views = [
-      { label: "Generation 0 (random brains)", world: createWorld(cfg, neuralFactory(gen0)) },
-      { label: `Generation ${evo.generation} (evolved)`, world: createWorld(cfg, neuralFactory(evo.population)) },
+      { label: "Random brains (generation 0)", world: createWorld(tcfg, neuralFactory(gen0)) },
+      {
+        label: nat ? `Living population (tick ${nat.tick.toLocaleString()})` : `Generation ${evo!.generation} (evolved)`,
+        world: createWorld(tcfg, neuralFactory(sample)),
+      },
     ];
   }
 }
@@ -108,18 +184,23 @@ function setScene(next: SceneKind): void {
 function advance(ticks: number): void {
   for (let t = 0; t < ticks; t++) {
     if (scene === "evolve") {
-      if (isEpisodeOver(evoWorld)) finishGeneration();
-      step(evoWorld);
+      if (nat) nat.step();
+      else {
+        if (isEpisodeOver(evoWorld!)) finishGeneration();
+        step(evoWorld!);
+      }
     } else {
       if (views.every((v) => isEpisodeOver(v.world))) {
         sceneEpisode++;
         const keep = scene === "best" ? selected : null;
         buildSceneViews();
-        selected = keep;
+        if (scene === "best" && views[0]) selected = { view: 0, id: views[0].world.creatures[0].id };
+        else selected = keep;
       }
       for (const v of views) if (!isEpisodeOver(v.world)) step(v.world);
     }
   }
+  flushNatural();
 }
 
 // ---------- fast-forward ----------
@@ -128,22 +209,28 @@ function fastLoop(): void {
   if (!fast) return;
   const until = performance.now() + 40;
   do {
-    runToEnd(evoWorld);
-    finishGeneration();
-    if (fastTarget !== null && evo.generation >= fastTarget) {
+    if (nat) {
+      for (let k = 0; k < 200; k++) nat.step();
+    } else {
+      runToEnd(evoWorld!);
+      finishGeneration();
+    }
+    if (fastTarget !== null && progress() >= fastTarget) {
+      flushNatural();
       stopFast();
       return;
     }
   } while (performance.now() < until);
+  flushNatural();
   setTimeout(fastLoop, 0);
 }
 
-function startFast(generations?: number): void {
+function startFast(amount?: number): void {
   if (scene !== "evolve") setScene("evolve");
-  fastTarget = generations ? evo.generation + generations : null;
+  fastTarget = amount ? progress() + amount : null;
   if (!fast) {
     fast = true;
-    post({ t: "fast", on: true, generation: evo.generation });
+    post({ t: "fast", on: true, generation: progress() });
     setTimeout(fastLoop, 0);
   }
 }
@@ -152,27 +239,37 @@ function stopFast(): void {
   if (!fast) return;
   fast = false;
   fastTarget = null;
-  post({ t: "fast", on: false, generation: evo?.generation ?? 0 });
+  post({ t: "fast", on: false, generation: evo || nat ? progress() : 0 });
 }
 
 // ---------- snapshots ----------
 
+function genomeOf(world: World, i: number): Genome | null {
+  const ctrl = world.controllers[i];
+  return ctrl instanceof NeuralController ? ctrl.genome : null;
+}
+
 function snapWorld(v: View, relativeOf: number | null): WorldSnap {
   const w = v.world;
+  const lin = lineageSrc();
   const n = w.creatures.length;
   const creatures = new Float32Array(n * CREATURE_STRIDE);
   let eaten = 0;
   for (let i = 0; i < n; i++) {
     const c = w.creatures[i];
     const o = i * CREATURE_STRIDE;
+    const gid = c.genomeId;
+    const known = gid !== null && lin.lineage.has(gid);
     creatures[o + C_X] = c.x;
     creatures[o + C_Y] = c.y;
     creatures[o + C_HEADING] = c.heading;
     creatures[o + C_ENERGY] = c.energy / c.body.maxEnergy;
     creatures[o + C_ALIVE] = c.alive ? 1 : 0;
-    creatures[o + C_RELATIVE] =
-      relativeOf !== null && c.genomeId !== null && evo.ancestorAt(c.genomeId, RELATIVE_DEPTH) === relativeOf ? 1 : 0;
+    creatures[o + C_RELATIVE] = relativeOf !== null && known && lin.ancestorAt(gid!, RELATIVE_DEPTH) === relativeOf ? 1 : 0;
     creatures[o + C_SIZE] = c.body.size;
+    creatures[o + C_ID] = c.id;
+    creatures[o + C_FAMILY] = known ? lin.ancestorAt(gid!, CLAN_DEPTH) : -1;
+    creatures[o + C_AGE] = c.age;
     eaten += c.foodEaten;
   }
   const active = w.food.filter((f) => f.active);
@@ -187,6 +284,7 @@ function snapWorld(v: View, relativeOf: number | null): WorldSnap {
     height: w.config.height,
     tick: w.tick,
     episodeTicks: w.config.episodeTicks,
+    endless: !!nat && w === nat.world,
     sensorRange: w.config.sensorRange,
     count: n,
     alive: aliveCount(w),
@@ -198,35 +296,42 @@ function snapWorld(v: View, relativeOf: number | null): WorldSnap {
 
 function snapSelected(): { snap: SelectedSnap | null; relativeOf: number | null } {
   if (!selected) return { snap: null, relativeOf: null };
-  const v = views[selected.view];
-  const c = v?.world.creatures[selected.index];
-  if (!c) return { snap: null, relativeOf: null };
-  const ctrl = v.world.controllers[selected.index];
-  const g = ctrl instanceof NeuralController ? ctrl.genome : null;
+  const sel = selected;
+  const v = views[sel.view];
+  const index = v ? v.world.creatures.findIndex((c) => c.id === sel.id) : -1;
+  if (index < 0) {
+    // Natural mode removes the dead, so a selected creature can vanish.
+    selected = null;
+    return { snap: null, relativeOf: null };
+  }
+  const c = v.world.creatures[index];
+  const ctrl = v.world.controllers[index];
+  const g = genomeOf(v.world, index);
+  const lin = lineageSrc();
 
   let ancestry: { id: number; generation: number }[] = [];
   let ancestryMore = 0;
   let relativeOf: number | null = null;
-  if (g && evo.lineage.has(g.id)) {
-    const chain = evo.ancestry(g.id, 100000);
-    ancestry = chain.slice(0, ANCESTRY_SHOWN).map((id) => ({ id, generation: evo.lineage.get(id)!.generation }));
+  if (g && lin.lineage.has(g.id)) {
+    const chain = lin.ancestry(g.id, 100000);
+    ancestry = chain.slice(0, ANCESTRY_SHOWN).map((id) => ({ id, generation: lin.lineage.get(id)?.generation ?? 0 }));
     ancestryMore = Math.max(0, chain.length - ANCESTRY_SHOWN);
-    // Relatives only make sense among the evolving population.
-    if (scene === "evolve") relativeOf = evo.ancestorAt(g.id, RELATIVE_DEPTH);
+    if (scene === "evolve") relativeOf = lin.ancestorAt(g.id, RELATIVE_DEPTH);
   }
 
-  const fi = v.world.nearestFood[selected.index];
+  const fi = v.world.nearestFood[index];
   const brain = ctrl instanceof NeuralController ? ctrl.brain : null;
   return {
     relativeOf,
     snap: {
-      view: selected.view,
-      index: selected.index,
+      view: sel.view,
+      id: c.id,
       alive: c.alive,
       energy: c.energy,
       speed: c.speed,
       foodEaten: c.foodEaten,
       age: c.age,
+      children: c.children,
       distanceTraveled: c.distanceTraveled,
       energySpent: c.energySpent,
       alignment: c.alignmentTicks > 0 ? c.alignmentSum / c.alignmentTicks : null,
@@ -243,6 +348,7 @@ function snapSelected(): { snap: SelectedSnap | null; relativeOf: number | null 
         maxEnergy: c.body.maxEnergy,
         evolved: !!g?.genes.body,
       },
+      lifeHistory: g?.genes.repro ? decodeRepro(g.genes.repro) : null,
       brain: brain && {
         shape: brain.shape,
         weights: new Float32Array(brain.weights),
@@ -261,12 +367,22 @@ function sendFrame(): void {
   if (snap && relativeOf !== null) {
     const ws = worldSnaps[snap.view];
     let n = 0;
-    for (let i = 0; i < ws.count; i++) if (i !== snap.index && ws.creatures[i * CREATURE_STRIDE + C_RELATIVE]) n++;
+    for (let i = 0; i < ws.count; i++) {
+      const o = i * CREATURE_STRIDE;
+      if (ws.creatures[o + C_ID] !== snap.id && ws.creatures[o + C_RELATIVE]) n++;
+    }
     snap.relatives = n;
   }
-  const src = scene === "best" ? bestSource() : null;
   post(
-    { t: "frame", scene, generation: evo.generation, views: worldSnaps, selected: snap, bestLabel: src?.label ?? null },
+    {
+      t: "frame",
+      mode: nat ? "natural" : "lab",
+      scene,
+      generation: progress(),
+      tick: liveWorld().tick,
+      views: worldSnaps,
+      selected: snap,
+    },
     worldSnaps.flatMap((s) => [s.creatures.buffer, s.food.buffer]),
   );
 }
@@ -277,11 +393,15 @@ function importData(data: any): void {
   if (data?.format === "evomind-run") {
     replay = null;
     reset(data.config, Evolution.fromJSON(data as RunFile));
-    post({ t: "info", message: `Loaded run at generation ${data.generation}.` });
+    post({ t: "info", message: `Loaded lab run at generation ${data.generation}.` });
+  } else if (data?.format === "evomind-natural") {
+    replay = null;
+    reset(data.config, NaturalEvolution.fromJSON(data as NaturalRunFile));
+    post({ t: "info", message: `Loaded natural run at tick ${Number(data.tick).toLocaleString()} (${data.genomes.length} genomes).` });
   } else if (data?.genome?.genes?.brain && data?.config) {
     // best.json from the headless runner
     const genome = genomeFromJSON(data.genome);
-    replay = { genome, config: data.config, label: `Loaded genome #${genome.id} (seed ${data.config.seed})` };
+    replay = { genome, config: { ...data.config, mode: "lab" }, label: `Loaded genome #${genome.id} (seed ${data.config.seed})` };
     setScene("best");
     post({ t: "info", message: `Loaded genome #${genome.id}. Showing it in "Watch best".` });
   } else {
@@ -302,7 +422,7 @@ self.onmessage = (ev: MessageEvent<ToWorker>) => {
         sendFrame();
         break;
       case "fast":
-        if (msg.on) startFast(msg.generations);
+        if (msg.on) startFast(msg.amount);
         else stopFast();
         break;
       case "scene":
@@ -310,10 +430,10 @@ self.onmessage = (ev: MessageEvent<ToWorker>) => {
         setScene(msg.scene);
         break;
       case "select":
-        selected = msg.index === null ? null : { view: msg.view, index: msg.index };
+        selected = msg.id === null ? null : { view: msg.view, id: msg.id };
         break;
       case "export":
-        post({ t: "export", run: evo.toJSON() });
+        post({ t: "export", run: (nat ?? evo)!.toJSON() });
         break;
       case "import":
         importData(msg.data);

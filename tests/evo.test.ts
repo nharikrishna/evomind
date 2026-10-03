@@ -99,7 +99,8 @@ describe("evolution", () => {
     const chain = evo.ancestry(child.id);
     expect(chain[0]).toBe(child.parentId);
     const root = chain[chain.length - 1];
-    expect(evo.lineage.get(root)).toEqual({ parentId: null, generation: 0 });
+    expect(evo.lineage.get(root)).toEqual({ parentId: null, generation: 0, founder: root });
+    expect(evo.lineage.get(child.id)!.founder).toBe(root);
     expect(evo.ancestorAt(child.id, 100)).toBe(root);
     expect(evo.history[0].diversity).toBeGreaterThan(0);
   });

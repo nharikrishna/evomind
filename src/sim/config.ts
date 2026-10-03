@@ -1,5 +1,9 @@
 /** Every tunable of the world lives here. UI and headless runner edit a copy. */
+/** lab = generational (we score and pick parents); natural = creatures reproduce on their own. */
+export type SimMode = "lab" | "natural";
+
 export interface SimConfig {
+  mode: SimMode;
   seed: number;
 
   // World
@@ -78,9 +82,26 @@ export interface SimConfig {
   acceleration: number;
   /** Std-dev of gaussian noise added to every sensor reading each tick. 0 = perfect senses. */
   sensorNoise: number;
+  /** Proprioception: brains get their own speed as a 5th input. */
+  senseSpeed: boolean;
+
+  // Natural mode (Phase 5)
+  /** Upkeep multiplier 1 + (age / agingScale)²: doubles at this age. 0 = no ageing. */
+  agingScale: number;
+  /** Ticks before a creature can reproduce. */
+  maturityAge: number;
+  /** Fraction of the energy a parent gives up that actually reaches the child. */
+  birthEfficiency: number;
+  /** Hard cap for performance; births are skipped while the population is at the cap. */
+  maxPopulation: number;
+  /** Ticks between recorded stats samples. */
+  sampleEvery: number;
+  /** Ticks between standardized lab tests of the living population (0 = off). */
+  labTestEvery: number;
 }
 
 export const DEFAULT_CONFIG: SimConfig = {
+  mode: "lab",
   seed: 1,
 
   width: 800,
@@ -129,6 +150,14 @@ export const DEFAULT_CONFIG: SimConfig = {
   sizeScaling: false,
   acceleration: 0,
   sensorNoise: 0,
+  senseSpeed: false,
+
+  agingScale: 0,
+  maturityAge: 150,
+  birthEfficiency: 0.8,
+  maxPopulation: 400,
+  sampleEvery: 250,
+  labTestEvery: 5000,
 };
 
 export function makeConfig(overrides: Partial<SimConfig> = {}): SimConfig {
@@ -147,4 +176,18 @@ export const REALISM_PRESET: Partial<SimConfig> = {
   sizeScaling: true,
   acceleration: 0.2,
   sensorNoise: 0.05,
+  senseSpeed: true,
+};
+
+/**
+ * Natural reproduction on top of the realism preset. Tuned headlessly so the
+ * population is limited by food (~200-300), not by the cap, and ageing keeps it turning over.
+ */
+export const NATURAL_PRESET: Partial<SimConfig> = {
+  ...REALISM_PRESET,
+  mode: "natural",
+  agingScale: 3000,
+  respawnRate: 0.01,
+  // Pure safety net: efficiency keeps evolving, and a 300k-tick run crept up to ~540.
+  maxPopulation: 1000,
 };

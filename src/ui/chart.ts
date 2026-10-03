@@ -1,18 +1,19 @@
-import type { GenerationStats } from "../analysis/metrics";
+/** Any record of numbers: per-generation stats, natural-mode samples, lab scores... */
+export type Row = Record<string, number>;
 
 /**
- * Small line chart for per-generation stats, drawn on canvas.
+ * Small line chart for stats over generations or ticks, drawn on canvas.
  * Follows the dataviz mark specs: 2px lines, hairline solid grid, end dot with a
  * 2px surface ring, end-value label in text ink, crosshair + one tooltip listing
  * every series, legend only when there are 2+ series.
  */
 
 export interface SeriesSpec {
-  key: keyof GenerationStats;
+  key: string;
   label: string;
   color: string;
   /** If set, a ~10% wash shows mean ± this standard deviation (population spread). */
-  sdKey?: keyof GenerationStats;
+  sdKey?: string;
 }
 
 export interface ChartOptions {
@@ -25,6 +26,21 @@ export interface ChartOptions {
   /** Multiply stored values before display, e.g. radians -> degrees, so axis ticks land on round numbers. */
   scale?: number;
 }
+
+/** What the x-axis measures. */
+export interface XAxis {
+  key: string;
+  /** Used in the tooltip heading, e.g. "Generation" or "Tick". */
+  label: string;
+  format: (x: number) => string;
+}
+
+export const X_GENERATION: XAxis = { key: "generation", label: "Generation", format: (x) => String(Math.round(x)) };
+export const X_TICK: XAxis = {
+  key: "tick",
+  label: "Tick",
+  format: (x) => (x >= 1e6 ? `${+(x / 1e6).toFixed(1)}M` : x >= 1000 ? `${+(x / 1000).toFixed(1)}k` : String(Math.round(x))),
+};
 
 const T = {
   surface: "#1a1a19",
@@ -49,7 +65,11 @@ export class LineChart {
   private ctx: CanvasRenderingContext2D;
   private tip: HTMLDivElement;
   private empty: HTMLDivElement;
-  private data: GenerationStats[] = [];
+  private data: Row[] = [];
+  private x: XAxis = X_GENERATION;
+  private get xKey(): string {
+    return this.x.key;
+  }
   private hover: number | null = null;
   private w = 0;
   private dirty = true;
@@ -106,7 +126,7 @@ export class LineChart {
   }
 
   /** A stat in display units. */
-  private val(row: GenerationStats, key: keyof GenerationStats): number {
+  private val(row: Row, key: string): number {
     return row[key] * (this.opts.scale ?? 1);
   }
 
@@ -114,7 +134,18 @@ export class LineChart {
     if (this.subEl) this.subEl.textContent = text;
   }
 
-  setData(data: GenerationStats[]): void {
+  setXAxis(x: XAxis): void {
+    if (x !== this.x) {
+      this.x = x;
+      this.dirty = true;
+    }
+  }
+
+  setEmptyText(text: string): void {
+    this.empty.textContent = text;
+  }
+
+  setData(data: Row[]): void {
     this.data = data;
     this.dirty = true;
   }
@@ -139,7 +170,7 @@ export class LineChart {
 
   private scales() {
     const d = this.data;
-    const x0 = d[0].generation, x1 = Math.max(d[d.length - 1].generation, x0 + 1);
+    const x0 = d[0][this.xKey], x1 = Math.max(d[d.length - 1][this.xKey], x0 + 1);
     let lo = this.opts.yRange ? this.opts.yRange[0] : 0;
     let hi = this.opts.yRange ? this.opts.yRange[1] : 0;
     for (const row of d) for (const s of this.opts.series) {
@@ -187,7 +218,7 @@ export class LineChart {
     const xs = Math.max(1, niceStep(x1 - x0, Math.max(2, Math.floor((w - PAD.left - PAD.right) / 70))));
     for (let g = Math.ceil(x0 / xs) * xs; g <= x1; g += xs) {
       ctx.fillStyle = T.muted;
-      ctx.fillText(String(Math.round(g)), sx(g), HEIGHT - PAD.bottom + 6);
+      ctx.fillText(this.x.format(g), sx(g), HEIGHT - PAD.bottom + 6);
     }
 
     // Spread bands (mean ± sd), drawn under the lines
@@ -196,13 +227,13 @@ export class LineChart {
       const sdKey = s.sdKey;
       ctx.beginPath();
       this.data.forEach((row, i) => {
-        const x = sx(row.generation), y = sy(this.val(row, s.key) + this.val(row, sdKey));
+        const x = sx(row[this.xKey]), y = sy(this.val(row, s.key) + this.val(row, sdKey));
         if (i === 0) ctx.moveTo(x, y);
         else ctx.lineTo(x, y);
       });
       for (let i = this.data.length - 1; i >= 0; i--) {
         const row = this.data[i];
-        ctx.lineTo(sx(row.generation), sy(this.val(row, s.key) - this.val(row, sdKey)));
+        ctx.lineTo(sx(row[this.xKey]), sy(this.val(row, s.key) - this.val(row, sdKey)));
       }
       ctx.closePath();
       ctx.globalAlpha = 0.14;
@@ -219,7 +250,7 @@ export class LineChart {
       ctx.lineWidth = 2;
       ctx.beginPath();
       this.data.forEach((row, i) => {
-        const x = sx(row.generation), y = sy(this.val(row, s.key));
+        const x = sx(row[this.xKey]), y = sy(this.val(row, s.key));
         if (i === 0) ctx.moveTo(x, y);
         else ctx.lineTo(x, y);
       });
@@ -232,19 +263,19 @@ export class LineChart {
     // Labels too close together would collide; let the legend + tooltip carry them then.
     const collide = ends.length > 1 && Math.abs(ends[0].y - ends[1].y) < 13;
     for (const { s, y } of ends) {
-      this.dot(sx(last.generation), y, s.color);
+      this.dot(sx(last[this.xKey]), y, s.color);
       if (!collide || s === this.opts.series[0]) {
         ctx.fillStyle = T.secondary;
         ctx.textAlign = "left";
         ctx.textBaseline = "middle";
-        ctx.fillText(this.opts.format(this.val(last, s.key)), sx(last.generation) + 8, y);
+        ctx.fillText(this.opts.format(this.val(last, s.key)), sx(last[this.xKey]) + 8, y);
       }
     }
 
     // Crosshair
     if (this.hover !== null) {
       const row = this.data[this.hover];
-      const x = Math.round(sx(row.generation)) + 0.5;
+      const x = Math.round(sx(row[this.xKey])) + 0.5;
       ctx.strokeStyle = T.muted;
       ctx.lineWidth = 1;
       ctx.beginPath();
@@ -276,26 +307,26 @@ export class LineChart {
     let lo = 0, hi = this.data.length - 1;
     while (hi - lo > 1) {
       const mid = (lo + hi) >> 1;
-      if (sx(this.data[mid].generation) < mx) lo = mid;
+      if (sx(this.data[mid][this.xKey]) < mx) lo = mid;
       else hi = mid;
     }
-    const i = Math.abs(sx(this.data[lo].generation) - mx) <= Math.abs(sx(this.data[hi].generation) - mx) ? lo : hi;
+    const i = Math.abs(sx(this.data[lo][this.xKey]) - mx) <= Math.abs(sx(this.data[hi][this.xKey]) - mx) ? lo : hi;
     if (i !== this.hover) {
       this.hover = i;
       this.dirty = true;
       this.fillTip(this.data[i]);
     }
     this.tip.hidden = false;
-    const tx = sx(this.data[i].generation);
+    const tx = sx(this.data[i][this.xKey]);
     const tw = this.tip.offsetWidth;
     this.tip.style.left = `${tx + 12 + tw > this.w ? tx - 12 - tw : tx + 12}px`;
   }
 
-  private fillTip(row: GenerationStats): void {
+  private fillTip(row: Row): void {
     this.tip.replaceChildren();
     const head = document.createElement("div");
     head.className = "tip-head";
-    head.textContent = `Generation ${row.generation}`;
+    head.textContent = `${this.x.label} ${row[this.xKey].toLocaleString()}`;
     this.tip.append(head);
     for (const s of this.opts.series) {
       const line = document.createElement("div");

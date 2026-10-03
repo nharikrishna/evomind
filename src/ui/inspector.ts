@@ -18,7 +18,8 @@ export function renderInspector(host: HTMLElement, s: SelectedSnap | null): void
     ["Energy", `${s.energy.toFixed(1)} / ${s.body.maxEnergy.toFixed(0)}`],
     ["Speed", s.speed.toFixed(2)],
     ["Food eaten", String(s.foodEaten)],
-    ["Age", `${s.age} ticks`],
+    ["Age", `${s.age.toLocaleString()} ticks`],
+    ...(s.lifeHistory ? ([["Children", String(s.children)]] as [string, string][]) : []),
     ["Distance", s.distanceTraveled.toFixed(0)],
     ["Energy spent", s.energySpent.toFixed(1)],
     ["Alignment", s.alignment === null ? "–" : s.alignment.toFixed(2)],
@@ -43,6 +44,20 @@ export function renderInspector(host: HTMLElement, s: SelectedSnap | null): void
   for (const [k, v] of brows) bdl.append(el("dt", undefined, k), el("dd", undefined, v));
   box.append(bdl);
   parts.push(box);
+
+  if (s.lifeHistory) {
+    const lh = s.lifeHistory;
+    const lbox = el("div", "body-box");
+    lbox.append(el("div", "ancestry-title", "Life history (evolved)"));
+    const ldl = el("dl", "kv");
+    const lrows: [string, string][] = [
+      ["Breeds at", `${Math.round(lh.reproThreshold * 100)}% of store`],
+      ["Gives each child", `${Math.round(lh.offspringShare * 100)}% of energy`],
+    ];
+    for (const [k, v] of lrows) ldl.append(el("dt", undefined, k), el("dd", undefined, v));
+    lbox.append(ldl);
+    parts.push(lbox);
+  }
 
   if (s.genome) {
     const box = el("div", "ancestry");

@@ -35,23 +35,28 @@
         <button data-scene="compare" role="tab" title="Random generation-0 brains vs today&rsquo;s brains on the identical world">Gen 0 vs now</button>
       </div>
       <div class="group">
+        <label class="inline" title="Colour creatures by energy, or by family (clan of a shared ancestor 8 generations back)">Colour
+          <select id="color">
+            <option value="energy">Energy</option>
+            <option value="family">Family</option>
+          </select>
+        </label>
+      </div>
+      <div class="group">
         <button id="fast" title="Evolve as fast as possible without drawing; charts keep updating">Fast-forward</button>
-        <button id="skip10" title="Fast-forward 10 generations, then resume watching">+10 gens</button>
-        <button id="skip100" title="Fast-forward 100 generations, then resume watching">+100 gens</button>
+        <button id="skip10" title="Fast-forward, then resume watching">+10 gens</button>
+        <button id="skip100" title="Fast-forward, then resume watching">+100 gens</button>
       </div>
     </nav>
 
     <main class="layout">
       <div class="tiles">
-        <div class="tile hero">
-          <div class="tile-label">Generation</div>
-          <div id="t-gen" class="tile-value">0</div>
-        </div>
-        <div class="tile"><div class="tile-label">Average fitness</div><div id="t-mean" class="tile-value">–</div></div>
-        <div class="tile"><div class="tile-label">Best fitness</div><div id="t-best" class="tile-value">–</div></div>
-        <div class="tile"><div class="tile-label">Best ever</div><div id="t-ever" class="tile-value">–</div></div>
-        <div class="tile"><div class="tile-label">Alignment</div><div id="t-align" class="tile-value">–</div></div>
-        <div class="tile"><div class="tile-label">Survivors</div><div id="t-surv" class="tile-value">–</div></div>
+        <div class="tile hero"><div id="l0" class="tile-label">Generation</div><div id="t0" class="tile-value">0</div></div>
+        <div class="tile"><div id="l1" class="tile-label"></div><div id="t1" class="tile-value">–</div></div>
+        <div class="tile"><div id="l2" class="tile-label"></div><div id="t2" class="tile-value">–</div></div>
+        <div class="tile"><div id="l3" class="tile-label"></div><div id="t3" class="tile-value">–</div></div>
+        <div class="tile"><div id="l4" class="tile-label"></div><div id="t4" class="tile-value">–</div></div>
+        <div class="tile"><div id="l5" class="tile-label"></div><div id="t5" class="tile-value">–</div></div>
       </div>
 
       <div class="main-row">
@@ -69,12 +74,29 @@
         </aside>
       </div>
 
-      <div class="charts">
+      <div id="lab-charts" class="charts">
         <div id="c-fitness"></div>
         <div id="c-align"></div>
         <div id="c-surv"></div>
         <div id="c-div"></div>
       </div>
+
+      <div id="nat-charts" class="charts">
+        <div id="c-pop"></div>
+        <div id="c-births"></div>
+        <div id="c-lab"></div>
+        <div id="c-gen"></div>
+        <div id="c-nalign"></div>
+        <div id="c-ndiv"></div>
+      </div>
+
+      <section id="life-section" class="body-section">
+        <div class="section-title">Life history <span class="muted-inline">· when to breed, and how much to give each child (r/K strategy)</span></div>
+        <div class="charts">
+          <div id="c-thresh"></div>
+          <div id="c-share"></div>
+        </div>
+      </section>
 
       <section id="body-section" class="body-section">
         <div class="section-title">Body evolution <span class="muted-inline">· line = population average, band = spread (±1 sd)</span></div>

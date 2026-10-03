@@ -4,7 +4,7 @@ type BrainData = NonNullable<SelectedSnap["brain"]>;
 
 const POS = [57, 135, 229];
 const NEG = [230, 103, 103];
-const INPUT_LABELS = ["food L/R", "food ahead", "food near", "energy"];
+const INPUT_LABELS = ["food L/R", "food ahead", "food near", "energy", "own speed"];
 const OUTPUT_LABELS = ["turn", "thrust"];
 
 function rgba(c: number[], a: number): string {

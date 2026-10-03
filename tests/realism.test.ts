@@ -80,6 +80,6 @@ describe("sensor noise", () => {
     const a = run(0.1), b = run(0.1), clean = run(0);
     expect(stateHash(a)).toBe(stateHash(b));
     expect(stateHash(a)).not.toBe(stateHash(clean));
-    expect(Array.from(a.sensors).every((v) => v >= -1 && v <= 1)).toBe(true);
+    expect(a.sensorViews.every((s) => Array.from(s).every((v) => v >= -1 && v <= 1))).toBe(true);
   });
 });

@@ -6,8 +6,12 @@ import { torusDelta, wrapAngle } from "./math";
  * Prey sensor layout. Everything is normalized to roughly [-1, 1].
  * Bearing is encoded as sin/cos so there's no discontinuity at +-PI.
  */
-export const PREY_SENSORS = ["foodSin", "foodCos", "foodNear", "energy"] as const;
-export const PREY_SENSOR_COUNT = PREY_SENSORS.length;
+export const PREY_SENSORS = ["foodSin", "foodCos", "foodNear", "energy", "speed"] as const;
+
+/** Inputs a prey brain gets: the first four always; own speed only with `senseSpeed`. */
+export function preySensorCount(cfg: SimConfig): number {
+  return cfg.senseSpeed ? 5 : 4;
+}
 
 /**
  * Fill `out` with the creature's view of the world. `foodIndex` is the nearest
@@ -35,4 +39,6 @@ export function sensePrey(
     out[2] = 0;
   }
   out[3] = c.energy / c.body.maxEnergy;
+  // Proprioception: how fast am I going, relative to my top speed?
+  if (out.length > 4) out[4] = c.speed / c.body.maxSpeed;
 }

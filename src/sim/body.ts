@@ -66,12 +66,12 @@ function defaultTraitValue(key: TraitKey, cfg: SimConfig): number {
   return key === "size" ? 1 : key === "maxSpeed" ? cfg.maxSpeed : key === "sensorRange" ? cfg.sensorRange : cfg.maxTurnRate;
 }
 
-export function traitFromGene(spec: TraitSpec, gene: number): number {
+export function traitFromGene(spec: { min: number; max: number }, gene: number): number {
   return spec.min + (spec.max - spec.min) * sigmoid(gene);
 }
 
 /** Gene value that decodes to exactly `value` (inverse of traitFromGene). */
-export function geneForTrait(spec: TraitSpec, value: number): number {
+export function geneForTrait(spec: { min: number; max: number }, value: number): number {
   const p = (value - spec.min) / (spec.max - spec.min);
   return logit(Math.min(1 - 1e-6, Math.max(1e-6, p)));
 }

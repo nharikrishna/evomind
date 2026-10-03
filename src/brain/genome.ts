@@ -27,6 +27,8 @@ export interface Genome {
     brain: Float32Array;
     /** Body trait genes (see body.ts); absent when bodies don't evolve. */
     body?: Float32Array;
+    /** Life-history genes (see lifeHistory.ts); natural mode only. */
+    repro?: Float32Array;
   };
 }
 

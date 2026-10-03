@@ -1,5 +1,5 @@
 import {
-  CREATURE_STRIDE, C_ALIVE, C_ENERGY, C_HEADING, C_RELATIVE, C_SIZE, C_X, C_Y, type WorldSnap,
+  CREATURE_STRIDE, C_AGE, C_ALIVE, C_ENERGY, C_FAMILY, C_HEADING, C_ID, C_RELATIVE, C_SIZE, C_X, C_Y, type WorldSnap,
 } from "../worker/protocol";
 
 // Creatures use hues 0-190 (red -> cyan) for energy, so food takes pink, outside that range.
@@ -7,6 +7,16 @@ const FOOD_COLOR = "#f472b6";
 const SELECT_COLOR = "#ffffff";
 const RELATIVE_COLOR = "#3987e5";
 const SENSE_COLOR = "rgba(57, 135, 229, 0.8)";
+/** Newborns get an expanding, fading ring for this many ticks. */
+const BIRTH_FLASH_TICKS = 40;
+
+/** How creatures are coloured: by energy (red→cyan) or by family (clan). */
+export type ColorMode = "energy" | "family";
+
+/** Stable, well-spread hue per family id; skips 290-360 so families never look like (pink) food. */
+function familyHue(family: number): number {
+  return (Math.abs(family) * 137.508) % 290;
+}
 
 function torusDelta(a: number, b: number, size: number): number {
   let d = b - a;
@@ -59,9 +69,10 @@ export class Renderer {
 
   draw(
     snap: WorldSnap,
-    selected: number | null,
+    selectedId: number | null,
     sense: { x: number; y: number } | null,
     sensorRange: number = snap.sensorRange,
+    colorMode: ColorMode = "energy",
   ): void {
     this.fit(snap);
     const { ctx, scale } = this;
@@ -80,6 +91,10 @@ export class Renderer {
     }
 
     const cr = snap.creatures;
+    let selected: number | null = null;
+    if (selectedId !== null) {
+      for (let i = 0; i < snap.count; i++) if (cr[i * CREATURE_STRIDE + C_ID] === selectedId) selected = i;
+    }
 
     // Sensor range + line to sensed food for the selected creature
     if (selected !== null && cr[selected * CREATURE_STRIDE + C_ALIVE]) {
@@ -107,7 +122,11 @@ export class Renderer {
       const o = i * CREATURE_STRIDE;
       if (!cr[o + C_ALIVE]) continue;
       const x = cr[o + C_X], y = cr[o + C_Y], e = cr[o + C_ENERGY], s = cr[o + C_SIZE] || 1;
-      ctx.fillStyle = `hsl(${Math.round(e * 190)}, 80%, ${45 + e * 15}%)`;
+      const fam = cr[o + C_FAMILY];
+      ctx.fillStyle =
+        colorMode === "family" && fam >= 0
+          ? `hsl(${familyHue(fam).toFixed(0)}, 70%, ${42 + e * 20}%)`
+          : `hsl(${Math.round(e * 190)}, 80%, ${45 + e * 15}%)`;
       ctx.save();
       ctx.translate(x, y);
       ctx.rotate(cr[o + C_HEADING]);
@@ -120,6 +139,17 @@ export class Renderer {
       ctx.fill();
       ctx.restore();
 
+      // Birth flash, only in the living world (lab episodes start everyone at age 0).
+      const age = cr[o + C_AGE];
+      if (snap.endless && age < BIRTH_FLASH_TICKS) {
+        const p = age / BIRTH_FLASH_TICKS;
+        ctx.strokeStyle = `rgba(255, 255, 255, ${(0.8 * (1 - p)).toFixed(3)})`;
+        ctx.lineWidth = 1.5 * px;
+        ctx.beginPath();
+        ctx.arc(x, y, (6 + 14 * p) * Math.max(1, s), 0, Math.PI * 2);
+        ctx.stroke();
+      }
+
       if (i === selected || cr[o + C_RELATIVE]) {
         ctx.strokeStyle = i === selected ? SELECT_COLOR : RELATIVE_COLOR;
         ctx.lineWidth = (i === selected ? 2 : 1.25) * px;
@@ -130,7 +160,7 @@ export class Renderer {
     }
   }
 
-  /** Index of the living creature nearest to a click (within 15 world px), or null. */
+  /** Id of the living creature nearest to a click (within 15 world px), or null. */
   pick(snap: WorldSnap, ev: MouseEvent): number | null {
     const p = this.toWorld(ev);
     const cr = snap.creatures;
@@ -144,7 +174,7 @@ export class Renderer {
       const d = dx * dx + dy * dy;
       if (d < bestD) {
         bestD = d;
-        best = i;
+        best = cr[o + C_ID];
       }
     }
     return best;

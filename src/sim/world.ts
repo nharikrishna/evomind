@@ -3,25 +3,31 @@ import type { Action, Creature, Food } from "./types";
 import type { Controller } from "./controllers";
 import { Rng } from "./rng";
 import { TorusGrid } from "./spatial";
-import { PREY_SENSOR_COUNT, sensePrey } from "./sensors";
+import { preySensorCount, sensePrey } from "./sensors";
 import { clamp, wrapAngle, wrapCoord } from "./math";
 import { defaultBody } from "./body";
 
+/**
+ * The world. Arrays are parallel: creatures[i] is driven by controllers[i] and
+ * senses into sensorViews[i]. In lab mode the population is fixed; in natural
+ * mode creatures are added (births) and removed (deaths) between ticks, so code
+ * outside the step loop should identify creatures by `id`, not by index.
+ */
 export interface World {
   readonly config: SimConfig;
   readonly rng: Rng;
   tick: number;
   creatures: Creature[];
-  /** controllers[i] drives creatures[i]. */
   controllers: Controller[];
   food: Food[];
   foodGrid: TorusGrid;
   /** Nearest sensed food per creature (-1 = none), refreshed every tick. */
-  nearestFood: Int32Array;
-  /** Last sensor vector per creature, flattened (creature i at i*PREY_SENSOR_COUNT). */
-  sensors: Float32Array;
-  /** sensorViews[i] = creature i's slice of `sensors` (precomputed, no per-tick allocation). */
+  nearestFood: number[];
+  /** Last sensor vector per creature (each its own buffer, reused every tick). */
   sensorViews: Float32Array[];
+  /** Next unused creature id. */
+  nextCreatureId: number;
+  readonly enforceNeuralPrey: boolean;
 }
 
 /**
@@ -36,6 +42,66 @@ export interface WorldOptions {
    * tests turn this off so they can drive creatures with fixed actions.
    */
   enforceNeuralPrey?: boolean;
+}
+
+/** A fresh creature with no genome yet (default body, starting energy). */
+export function newCreature(world: World, x: number, y: number, heading: number): Creature {
+  return {
+    id: world.nextCreatureId++,
+    speciesId: "prey",
+    x,
+    y,
+    heading,
+    speed: 0,
+    energy: world.config.initialEnergy,
+    alive: true,
+    foodEaten: 0,
+    age: 0,
+    genomeId: null,
+    body: defaultBody(world.config),
+    children: 0,
+    distanceTraveled: 0,
+    energySpent: 0,
+    alignmentSum: 0,
+    alignmentTicks: 0,
+    ticksTowardFood: 0,
+  };
+}
+
+/** Add a creature (initial population or a birth). */
+export function addCreature(world: World, c: Creature, ctrl: Controller): void {
+  if (world.enforceNeuralPrey && c.speciesId === "prey" && ctrl.kind !== "neural") {
+    throw new Error(`Prey ${c.id} has a "${ctrl.kind}" controller; prey must be neural.`);
+  }
+  // The genome may have given this creature a smaller energy store than its starting energy.
+  c.energy = Math.min(c.energy, c.body.maxEnergy);
+  world.creatures.push(c);
+  world.controllers.push(ctrl);
+  world.nearestFood.push(-1);
+  world.sensorViews.push(new Float32Array(preySensorCount(world.config)));
+}
+
+/** Drop dead creatures from all parallel arrays. Returns the removed creatures. */
+export function removeDead(world: World): Creature[] {
+  const dead: Creature[] = [];
+  let w = 0;
+  for (let i = 0; i < world.creatures.length; i++) {
+    const c = world.creatures[i];
+    if (!c.alive) {
+      dead.push(c);
+      continue;
+    }
+    world.creatures[w] = c;
+    world.controllers[w] = world.controllers[i];
+    world.nearestFood[w] = world.nearestFood[i];
+    world.sensorViews[w] = world.sensorViews[i];
+    w++;
+  }
+  world.creatures.length = w;
+  world.controllers.length = w;
+  world.nearestFood.length = w;
+  world.sensorViews.length = w;
+  return dead;
 }
 
 export function createWorld(
@@ -59,53 +125,25 @@ export function createWorld(
     foodGrid.insert(i, f.x, f.y);
   }
 
-  const creatures: Creature[] = [];
-  const controllers: Controller[] = [];
-  for (let i = 0; i < config.creatureCount; i++) {
-    const c: Creature = {
-      id: i,
-      speciesId: "prey",
-      x: rng.range(0, config.width),
-      y: rng.range(0, config.height),
-      heading: rng.range(-Math.PI, Math.PI),
-      speed: 0,
-      energy: config.initialEnergy,
-      alive: true,
-      foodEaten: 0,
-      age: 0,
-      genomeId: null,
-      body: defaultBody(config),
-      distanceTraveled: 0,
-      energySpent: 0,
-      alignmentSum: 0,
-      alignmentTicks: 0,
-      ticksTowardFood: 0,
-    };
-    const ctrl = makeController(c, i, rng, config);
-    if (enforceNeuralPrey && c.speciesId === "prey" && ctrl.kind !== "neural") {
-      throw new Error(`Prey ${i} has a "${ctrl.kind}" controller; prey must be neural.`);
-    }
-    // The genome may have given this creature a smaller energy store than the starting energy.
-    c.energy = Math.min(c.energy, c.body.maxEnergy);
-    creatures.push(c);
-    controllers.push(ctrl);
-  }
-
-  const sensors = new Float32Array(config.creatureCount * PREY_SENSOR_COUNT);
-  return {
+  const world: World = {
     config,
     rng,
     tick: 0,
-    creatures,
-    controllers,
+    creatures: [],
+    controllers: [],
     food,
     foodGrid,
-    nearestFood: new Int32Array(config.creatureCount).fill(-1),
-    sensors,
-    sensorViews: Array.from({ length: config.creatureCount }, (_, i) =>
-      sensors.subarray(i * PREY_SENSOR_COUNT, (i + 1) * PREY_SENSOR_COUNT),
-    ),
+    nearestFood: [],
+    sensorViews: [],
+    nextCreatureId: 0,
+    enforceNeuralPrey,
   };
+
+  for (let i = 0; i < config.creatureCount; i++) {
+    const c = newCreature(world, rng.range(0, config.width), rng.range(0, config.height), rng.range(-Math.PI, Math.PI));
+    addCreature(world, c, makeController(c, i, rng, config));
+  }
+  return world;
 }
 
 const action: Action = { turn: 0, thrust: 0 };
@@ -151,11 +189,12 @@ export function step(world: World): void {
     c.x = wrapCoord(c.x + Math.cos(c.heading) * c.speed, cfg.width);
     c.y = wrapCoord(c.y + Math.sin(c.heading) * c.speed, cfg.height);
 
-    // Metabolism
-    const cost = body.basal + cfg.moveCost * body.moveFactor * c.speed * c.speed;
+    // Metabolism. Ageing: upkeep grows with age (doubles at age = agingScale).
+    const aging = cfg.agingScale > 0 ? 1 + (c.age / cfg.agingScale) ** 2 : 1;
+    const cost = body.basal * aging + cfg.moveCost * body.moveFactor * c.speed * c.speed;
     c.energy -= cost;
 
-    // Recorded-only stats (sensors[1] = cos of bearing to food, pre-move)
+    // Recorded-only stats (true cos of bearing to food, pre-move)
     c.energySpent += cost;
     c.distanceTraveled += c.speed;
     if (near >= 0 && c.speed > MOVING_SPEED) {

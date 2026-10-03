@@ -19,6 +19,8 @@ export interface Creature {
   genomeId: number | null;
   /** Physical traits and their energy consequences. */
   body: Body;
+  /** Offspring produced (natural mode). */
+  children: number;
 
   // Recorded-only: these never feed back into behavior; they exist for analysis.
   distanceTraveled: number;

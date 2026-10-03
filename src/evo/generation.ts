@@ -44,6 +44,8 @@ export function runEpisode(
 export interface LineageEntry {
   parentId: number | null;
   generation: number;
+  /** The generation-0 (or reseeded) ancestor this lineage started from: its "family". */
+  founder: number;
 }
 
 /** Everything needed to resume a run bit-identically. */
@@ -58,8 +60,8 @@ export interface RunFile {
   history: GenerationStats[];
   rngState: [number, number | null];
   nextGenomeId: number;
-  /** [id, parentId, generation] for every genome ever created. */
-  lineage: [number, number | null, number][];
+  /** [id, parentId, generation, founder] for every genome ever created. */
+  lineage: [number, number | null, number, number?][];
 }
 
 export class Evolution {
@@ -75,7 +77,7 @@ export class Evolution {
 
   constructor(readonly config: SimConfig) {
     this.population = randomPopulation(config, this.ids);
-    for (const g of this.population) this.lineage.set(g.id, { parentId: null, generation: 0 });
+    for (const g of this.population) this.lineage.set(g.id, { parentId: null, generation: 0, founder: g.id });
     this.rng = new Rng(deriveSeed(config.seed, 0xe70));
   }
 
@@ -118,7 +120,7 @@ export class Evolution {
       history: this.history,
       rngState: this.rng.getState(),
       nextGenomeId: this.ids.peek(),
-      lineage: [...this.lineage].map(([id, e]) => [id, e.parentId, e.generation]),
+      lineage: [...this.lineage].map(([id, e]) => [id, e.parentId, e.generation, e.founder]),
     };
   }
 
@@ -133,7 +135,9 @@ export class Evolution {
     evo.rng.setState(run.rngState);
     evo.ids = new GenomeIds(run.nextGenomeId);
     evo.lineage.clear();
-    for (const [id, parentId, generation] of run.lineage) evo.lineage.set(id, { parentId, generation });
+    for (const [id, parentId, generation, founder] of run.lineage) {
+      evo.lineage.set(id, { parentId, generation, founder: founder ?? id });
+    }
     return evo;
   }
 
@@ -217,7 +221,8 @@ export class Evolution {
         shape: parent.shape,
         genes: body ? { brain: weights, body } : { brain: weights },
       };
-      this.lineage.set(child.id, { parentId: parent.id, generation: child.generation });
+      const founder = this.lineage.get(parent.id)?.founder ?? parent.id;
+      this.lineage.set(child.id, { parentId: parent.id, generation: child.generation, founder });
       next.push(child);
     }
     return next;

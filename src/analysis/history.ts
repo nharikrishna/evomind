@@ -17,13 +17,13 @@ export function historyToCSV(history: readonly GenerationStats[]): string {
 
 /** Plain-JSON form of a genome (Float32Array -> number[]). */
 export function genomeToJSON(g: Genome): object {
-  const genes: Record<string, number[]> = { brain: Array.from(g.genes.brain) };
-  if (g.genes.body) genes.body = Array.from(g.genes.body);
+  const genes: Record<string, number[]> = {};
+  for (const [k, v] of Object.entries(g.genes)) if (v) genes[k] = Array.from(v);
   return { ...g, genes };
 }
 
 export function genomeFromJSON(o: any): Genome {
-  const genes: Genome["genes"] = { brain: Float32Array.from(o.genes.brain) };
-  if (o.genes.body) genes.body = Float32Array.from(o.genes.body);
-  return { ...o, genes };
+  const genes: Record<string, Float32Array> = {};
+  for (const [k, v] of Object.entries(o.genes as Record<string, number[]>)) genes[k] = Float32Array.from(v);
+  return { ...o, genes: genes as Genome["genes"] };
 }

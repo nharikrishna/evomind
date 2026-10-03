@@ -4,6 +4,7 @@
  *   npm run evolve -- --gens 200 --seeds 1,2,3 --out runs
  *   npm run evolve -- --bodies                      (evolvable bodies + energy-surplus fitness)
  *   npm run evolve -- --realism                     (bodies + size scaling, inertia, sensor noise)
+ *   npm run evolve -- --natural --ticks 200000      (natural reproduction, realism preset)
  *   npm run evolve -- --bodies --set costSpeed=0.05,mutationRate=0.15
  *
  * For each seed: evolves a population, prints progress, then runs the Phase 3
@@ -12,10 +13,11 @@
  */
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { BODIES_PRESET, makeConfig, REALISM_PRESET, type SimConfig } from "../src/sim/config";
+import { BODIES_PRESET, makeConfig, NATURAL_PRESET, REALISM_PRESET, type SimConfig } from "../src/sim/config";
 import { Evolution } from "../src/evo/generation";
 import { proofReport, type ProofReport } from "../src/analysis/baselines";
 import { genomeToJSON, historyToCSV } from "../src/analysis/history";
+import { NaturalEvolution } from "../src/evo/natural";
 
 function arg(name: string, fallback: string): string {
   const i = process.argv.indexOf(`--${name}`);
@@ -36,12 +38,49 @@ function overrides(): Partial<SimConfig> {
   const raw = arg("set", "");
   for (const pair of raw ? raw.split(",") : []) {
     const [k, v] = pair.split("=");
-    out[k] = v === "true" ? true : v === "false" ? false : Number(v);
+    out[k] = v === "true" ? true : v === "false" ? false : Number.isNaN(Number(v)) ? (v as never) : Number(v);
   }
   return out as Partial<SimConfig>;
 }
 
 const f = (x: number, d = 2) => x.toFixed(d).padStart(6);
+
+if (process.argv.includes("--natural")) {
+  runNatural();
+  process.exit(0);
+}
+
+/** Natural mode: no generations; print samples over time plus periodic lab tests. */
+function runNatural(): void {
+  const ticks = Number(arg("ticks", "100000"));
+  const printEvery = Number(arg("every", "20")); // in samples
+  for (const seed of seeds) {
+    const config = makeConfig({ seed, ...NATURAL_PRESET, ...overrides() });
+    const nat = new NaturalEvolution(config);
+    const t0 = performance.now();
+    console.log(`
+=== natural, seed ${seed}: ${ticks} ticks ===`);
+    console.log("    tick   pop  born  died   gen  fams  align   speed  sensor   size  thresh  share   lab");
+    let printed = 0;
+    while (nat.tick < ticks) {
+      nat.step();
+      if (nat.stats.length > printed && (nat.stats.length - 1) % printEvery === 0) {
+        const s = nat.stats[nat.stats.length - 1];
+        const lab = nat.labScores.length ? nat.labScores[nat.labScores.length - 1].meanFood.toFixed(1) : "-";
+        console.log(
+          `${String(s.tick).padStart(8)} ${String(s.population).padStart(5)} ${String(s.births).padStart(5)} ${String(s.deaths).padStart(5)} ${f(s.meanGeneration, 1)} ${String(s.families).padStart(5)} ${f(s.alignment)}  ${f(s.maxSpeedMean)}  ${f(s.sensorRangeMean, 0)} ${f(s.sizeMean)}  ${f(s.reproThresholdMean)} ${f(s.offspringShareMean)} ${lab.padStart(5)}`,
+        );
+      }
+      printed = nat.stats.length;
+    }
+    const secs = (performance.now() - t0) / 1000;
+    console.log(`(${secs.toFixed(1)}s; extinctions ${nat.extinctions}; lab baseline ${nat.labBaseline?.toFixed(2)}; champion children ${nat.champion?.children})`);
+    console.log("  lab tests (food/creature in standard worlds): " + nat.labScores.map((l) => `${l.tick / 1000}k:${l.meanFood.toFixed(1)}`).join("  "));
+    const dir = join(outDir, `natural-seed-${seed}`);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "run.json"), JSON.stringify(nat.toJSON()));
+  }
+}
 
 interface Verdict { seed: number; report: ProofReport; pass: boolean }
 const verdicts: Verdict[] = [];

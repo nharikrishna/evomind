@@ -86,7 +86,7 @@ describe("sensors", () => {
   const creature = (heading: number): Creature => ({
     id: 0, speciesId: "prey", x: 10, y: 300, heading, speed: 0,
     energy: 50, alive: true, foodEaten: 0, age: 0, genomeId: null,
-    body: defaultBody(cfg),
+    body: defaultBody(cfg), children: 0,
     distanceTraveled: 0, energySpent: 0, alignmentSum: 0, alignmentTicks: 0, ticksTowardFood: 0,
   });
 

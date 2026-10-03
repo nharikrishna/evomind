@@ -293,7 +293,9 @@ dl.kv dd { margin: 0; text-align: right; font-variant-numeric: tabular-nums; }
 
 .settings { display: grid; grid-template-columns: 1fr 96px; gap: 6px 10px; align-items: center; font-size: 13px; }
 .settings label { color: var(--text-2); }
-.settings input { width: 100%; padding: 4px 6px; }
+.settings input, .settings select { width: 100%; padding: 4px 6px; }
+.settings select { min-width: 0; }
+.settings #set-preset, .settings #set-mode { grid-column: auto; }
 .settings input.check { width: 16px; height: 16px; justify-self: end; accent-color: var(--accent); }
 .body-box { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border); }
 .body-box .ancestry-title { font-size: 12px; margin-bottom: 4px; color: var(--muted); }

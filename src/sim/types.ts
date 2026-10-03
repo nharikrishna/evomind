@@ -29,6 +29,8 @@ export interface Creature {
   thermalSpent: number;
   /** Neighbours within crowdRadius last tick (crowding). */
   crowding: number;
+  /** Recorded-only: lifetime fruit eaten (in meals). */
+  fruitEaten: number;
 
   // Recorded-only: these never feed back into behavior; they exist for analysis.
   distanceTraveled: number;
@@ -49,6 +51,10 @@ export interface Food {
   active: boolean;
   /** Local growth multiplier (fertility × biome), set when it sprouts. 1 for random food. */
   growth: number;
+  /** Fruit: the tree it grows on (-1 for other food). */
+  tree: number;
+  /** Fruit: ticks since it ripened (it rots after fruitLife). */
+  age: number;
 }
 
 /** What a controller decides each tick. The world clamps both values. */

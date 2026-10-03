@@ -16,7 +16,7 @@ export const PREY_SENSORS = ["foodSin", "foodCos", "foodNear", "energy", "speed"
  */
 export function preySensorCount(cfg: SimConfig): number {
   return 4 + (cfg.senseSpeed ? 1 : 0) + (cfg.biomeSense ? BIOMES.length : 0)
-    + (cfg.senseFoodAmount ? 4 : 0) + (cfg.senseCrowd ? 3 : 0);
+    + (cfg.senseFoodAmount ? 4 : 0) + (cfg.senseCrowd ? 3 : 0) + (cfg.fruit ? 3 : 0);
 }
 
 /** Optional extra perceptions (each only used when its sense is switched on). */
@@ -29,6 +29,8 @@ export interface ExtraSenses {
   crowd: { n: number; dx: number; dy: number };
   /** Vegetation model: food where I stand (0..1); replaces "food near". */
   here?: number;
+  /** Nearest fruit in range (null if none). */
+  fruit?: { x: number; y: number; distSq: number } | null;
 }
 
 /** Human-readable input names, in order (for the brain view). */
@@ -38,6 +40,7 @@ export function preySensorLabels(cfg: SimConfig): string[] {
   if (cfg.biomeSense) out.push(...BIOMES.map((b) => `in ${b.name.toLowerCase()}`));
   if (cfg.senseFoodAmount) out.push("food amount", "richest L/R", "richest ahead", "richest amount");
   if (cfg.senseCrowd) out.push("crowding", "crowd L/R", "crowd ahead");
+  if (cfg.fruit) out.push("fruit L/R", "fruit ahead", "fruit near");
   return out;
 }
 
@@ -97,6 +100,17 @@ export function sensePrey(
       out[k++] = Math.cos(rel);
     } else {
       out[k++] = 0; out[k++] = 0;
+    }
+  }
+  if (cfg.fruit) {
+    const f = extra?.fruit;
+    if (f) {
+      const rel = wrapAngle(Math.atan2(torusDelta(c.y, f.y, cfg.height), torusDelta(c.x, f.x, cfg.width)) - c.heading);
+      out[k++] = Math.sin(rel);
+      out[k++] = Math.cos(rel);
+      out[k++] = 1 - Math.sqrt(f.distSq) / range;
+    } else {
+      out[k++] = 0; out[k++] = 0; out[k++] = 0;
     }
   }
 }

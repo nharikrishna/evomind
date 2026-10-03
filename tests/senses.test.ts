@@ -40,7 +40,7 @@ describe("extra senses", () => {
   const cfg = makeConfig({ senseFoodAmount: true, senseCrowd: true, crowdTolerance: 5 });
   const creature: Creature = {
     id: 0, speciesId: "prey", x: 100, y: 100, heading: 0, speed: 0, energy: 50, alive: true, foodEaten: 0, age: 0,
-    genomeId: null, body: defaultBody(cfg), children: 0, biome: -1, region: -1, thermalSpent: 0, crowding: 0,
+    genomeId: null, body: defaultBody(cfg), children: 0, biome: -1, region: -1, thermalSpent: 0, crowding: 0, fruitEaten: 0,
     distanceTraveled: 0, energySpent: 0, alignmentSum: 0, alignmentTicks: 0, ticksTowardFood: 0,
   };
 

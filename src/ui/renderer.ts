@@ -1,5 +1,5 @@
 import {
-  CREATURE_STRIDE, C_AGE, C_ALIVE, C_ENERGY, C_HEADING, C_ID, C_INSULATION, C_MAXSPEED, C_RELATIVE, C_SENSOR, C_SIZE, C_SPECIES, C_X, C_Y,
+  CREATURE_STRIDE, C_AGE, C_ALIVE, C_DIET, C_ENERGY, C_HEADING, C_ID, C_INSULATION, C_MAXSPEED, C_RELATIVE, C_SENSOR, C_SIZE, C_SPECIES, C_X, C_Y,
   type Terrain, type WorldSnap,
 } from "../worker/protocol";
 import { sampleGrid } from "../sim/food";
@@ -17,7 +17,7 @@ const MIN_CREATURE_PX = 5;
 const MAX_ZOOM = 12;
 
 /** How creatures are coloured: by energy (red→cyan), by species, or by a trait on a one-hue ramp. */
-export type ColorMode = "energy" | "species" | "age" | "size" | "speed" | "sensor" | "insulation";
+export type ColorMode = "energy" | "species" | "age" | "size" | "speed" | "sensor" | "insulation" | "diet";
 
 /**
  * Stable colour per species id (golden-angle hues). Skips 290-360 so a species
@@ -34,6 +34,7 @@ const TRAIT_OFFSET: Record<Exclude<ColorMode, "energy" | "species">, number> = {
   speed: C_MAXSPEED,
   sensor: C_SENSOR,
   insulation: C_INSULATION,
+  diet: C_DIET,
 };
 
 /** Range used for the current trait colouring (for the legend), or null in energy mode. */
@@ -363,6 +364,20 @@ export class Renderer {
       ctx.globalAlpha = Math.max(0.15, Math.min(1, groundStrength));
       ctx.drawImage(this.groundImage(snap.fertility), 0, 0, snap.width, snap.height);
       ctx.globalAlpha = 1;
+    }
+
+    // Fruit trees: dark canopy discs under the fruit
+    if (snap.trees.length) {
+      ctx.fillStyle = "rgba(20, 70, 35, 0.75)";
+      ctx.strokeStyle = "rgba(90, 160, 100, 0.6)";
+      ctx.lineWidth = px;
+      const tr = Math.max(9, 4 * px);
+      for (let k = 0; k < snap.trees.length; k += 2) {
+        ctx.beginPath();
+        ctx.arc(snap.trees[k], snap.trees[k + 1], tr, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+      }
     }
 
     // Food (never smaller than ~2 screen px)

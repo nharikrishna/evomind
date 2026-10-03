@@ -230,6 +230,13 @@ const bodyCharts = [
     format: (v) => v.toFixed(2),
     yRange: [0, 1],
   }),
+  new LineChart($("c-diet"), {
+    title: "Diet",
+    subtitle: "0 = grazer (grass) … 1 = fruit-eater",
+    series: [{ key: "dietMean", sdKey: "dietSd", label: "Diet", color: SERIES_1 }],
+    format: (v) => v.toFixed(2),
+    yRange: [0, 1],
+  }),
   new LineChart($("c-turn"), {
     title: "Turn rate",
     subtitle: "degrees/tick",
@@ -270,6 +277,12 @@ const biomeCharts = [
     title: "Insulation by biome",
     subtitle: "the clearest place to watch tundra vs desert split",
     series: biomeSeries("insul_"),
+    format: (v) => v.toFixed(2),
+  }),
+  new LineChart($("c-bdiet"), {
+    title: "Diet by biome",
+    subtitle: "fruit-rich forest vs grass-rich grassland",
+    series: biomeSeries("diet_"),
     format: (v) => v.toFixed(2),
   }),
   new LineChart($("c-bsensor"), {
@@ -427,6 +440,7 @@ const LEGEND_LABEL: Record<ColorMode, [string, (v: number) => string]> = {
   speed: ["Max speed", (v) => v.toFixed(1)],
   sensor: ["Sensor", (v) => `${v.toFixed(0)}px`],
   insulation: ["Insulation", (v) => v.toFixed(2)],
+  diet: ["Diet", (v) => v.toFixed(2)],
   age: ["Age", (v) => v.toFixed(0)],
 };
 
@@ -529,7 +543,7 @@ function renderRegions(list: RegionSummary[]): void {
   const table = $("regions-table") as HTMLTableElement;
   table.replaceChildren();
   const head = table.createTHead().insertRow();
-  for (const h of ["Region", "Temp.", "Pop.", "Species", "Main species", "Size", "Speed", "Sensor", "Insulation", "Gen. distance"]) {
+  for (const h of ["Region", "Temp.", "Pop.", "Species", "Main species", "Size", "Speed", "Sensor", "Insulation", "Diet", "Gen. distance"]) {
     const th = document.createElement("th");
     th.textContent = h;
     head.append(th);
@@ -558,6 +572,7 @@ function renderRegions(list: RegionSummary[]): void {
     cell(empty ? "–" : r.speed.toFixed(2));
     cell(empty ? "–" : r.sensor.toFixed(0));
     cell(empty ? "–" : r.insulation.toFixed(2));
+    cell(empty ? "–" : r.diet.toFixed(2));
     cell(empty ? "–" : r.distance.toFixed(3));
     tr.title = "Zoom the map to this region";
     tr.addEventListener("click", () => {
@@ -578,6 +593,7 @@ function applyMode(): void {
   $("biome-section").hidden = !(nat && config.biomes);
   // Clustering of food items doesn't apply to continuous ground cover.
   $("c-cluster").hidden = config.foodModel === "vegetation";
+  $("c-diet").hidden = $("c-bdiet").hidden = !config.fruit;
   $("eco-row").hidden = !nat;
   $("regions-panel").hidden = !config.biomes;
   $("eco-row").classList.toggle("single", !config.biomes);
@@ -664,6 +680,7 @@ function toNatRows(stats: NaturalStats[]): Row[] {
       row[`speed_${b}`] = v ? s.biomeSpeed[b] : NaN;
       row[`sensor_${b}`] = v ? s.biomeSensor[b] : NaN;
       row[`insul_${b}`] = v ? s.biomeInsulation[b] : NaN;
+      row[`diet_${b}`] = v ? s.biomeDiet[b] : NaN;
     });
     return row;
   });

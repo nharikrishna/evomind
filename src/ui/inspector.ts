@@ -26,6 +26,7 @@ export function renderInspector(host: HTMLElement, s: SelectedSnap | null): void
     ["Energy spent", s.energySpent.toFixed(1)],
     ...(s.thermalSpent > 0 ? ([["  on warmth/cooling", s.thermalSpent.toFixed(1)]] as [string, string][]) : []),
     ...(s.crowding > 0 ? ([["Neighbours", String(s.crowding)]] as [string, string][]) : []),
+    ...(s.fruitEaten > 0 ? ([["  of it fruit", `${s.fruitEaten.toFixed(1)} meals`]] as [string, string][]) : []),
     ["Alignment", s.alignment === null ? "–" : s.alignment.toFixed(2)],
     ["Genome", s.genome ? `#${s.genome.id}` : "–"],
     ["Born in", s.genome ? `generation ${s.genome.generation}` : "–"],
@@ -44,6 +45,7 @@ export function renderInspector(host: HTMLElement, s: SelectedSnap | null): void
     ["Size", `${b.size.toFixed(2)}×`],
     ["Turn rate", `${((b.turnRate * 180) / Math.PI).toFixed(1)}°/tick`],
     ["Insulation", b.insulation.toFixed(2)],
+    ["Diet", `${b.diet.toFixed(2)} (${b.diet < 0.35 ? "grazer" : b.diet > 0.65 ? "fruit-eater" : "generalist"})`],
     ["Upkeep", `${b.basal.toFixed(3)} /tick`],
   ];
   for (const [k, v] of brows) bdl.append(el("dt", undefined, k), el("dd", undefined, v));

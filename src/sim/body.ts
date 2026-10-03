@@ -14,7 +14,7 @@ export interface TraitSpec {
   unit: string;
 }
 
-export type TraitKey = "maxSpeed" | "sensorRange" | "size" | "turnRate" | "insulation";
+export type TraitKey = "maxSpeed" | "sensorRange" | "size" | "turnRate" | "insulation" | "diet";
 
 export const TRAITS: readonly TraitSpec[] = [
   { key: "maxSpeed", label: "Max speed", min: 0.5, max: 4, unit: "px/tick" },
@@ -23,6 +23,8 @@ export const TRAITS: readonly TraitSpec[] = [
   { key: "turnRate", label: "Turn rate", min: 0.05, max: 0.4, unit: "rad/tick" },
   // Fur / fat. Only matters (and only costs) when temperature is on.
   { key: "insulation", label: "Insulation", min: 0, max: 1, unit: "" },
+  // Digestion: 0 = grazer (grass), 1 = fruit-eater. Only matters when fruit exists.
+  { key: "diet", label: "Diet", min: 0, max: 1, unit: "" },
 ];
 
 /** A creature's physical makeup plus the per-tick consequences derived from it. */
@@ -33,6 +35,11 @@ export interface Body {
   turnRate: number;
   /** Fur / fat, 0..1: keeps heat in (good in cold, bad in heat). */
   insulation: number;
+  /** Digestion, 0 = grazer .. 1 = fruit-eater. */
+  diet: number;
+  /** Fraction of grass / fruit energy this gut extracts. */
+  grassEff: number;
+  fruitEff: number;
   /** Energy burned per tick just for having this body. */
   basal: number;
   eatRadius: number;
@@ -57,6 +64,7 @@ export function defaultBody(cfg: SimConfig): Body {
     size: 1,
     turnRate: cfg.maxTurnRate,
     insulation: DEFAULT_INSULATION,
+    ...digestion(DEFAULT_DIET),
     basal: cfg.basalCost,
     eatRadius: cfg.eatRadius,
     effTurn: cfg.maxTurnRate,
@@ -72,6 +80,17 @@ export function defaultBody(cfg: SimConfig): Body {
  */
 export const DEFAULT_INSULATION = 0.1;
 
+/** Starting diet: mostly a grazer (grass was the only food before fruit). */
+export const DEFAULT_DIET = 0.2;
+
+/**
+ * Digestion trade-off: a gut tuned to grass extracts little from fruit and vice
+ * versa; a generalist gets moderate value from both.
+ */
+export function digestion(diet: number): { diet: number; grassEff: number; fruitEff: number } {
+  return { diet, grassEff: 1 - 0.7 * diet, fruitEff: 0.3 + 0.7 * diet };
+}
+
 /** Trait value the default body has, for each trait. */
 export function defaultTraitValue(key: TraitKey, cfg: SimConfig): number {
   switch (key) {
@@ -80,6 +99,7 @@ export function defaultTraitValue(key: TraitKey, cfg: SimConfig): number {
     case "sensorRange": return cfg.sensorRange;
     case "turnRate": return cfg.maxTurnRate;
     case "insulation": return DEFAULT_INSULATION;
+    case "diet": return DEFAULT_DIET;
   }
 }
 
@@ -102,6 +122,7 @@ export function bodyFromGenes(genes: Float32Array, cfg: SimConfig): Body {
   const [maxSpeed, sensorRange, size, turnRate] = TRAITS.map((t, i) => traitFromGene(t, genes[i]));
   // Older genomes (saved before insulation existed) have 4 body genes.
   const insulation = genes.length > 4 ? traitFromGene(TRAITS[4], genes[4]) : DEFAULT_INSULATION;
+  const diet = genes.length > 5 ? traitFromGene(TRAITS[5], genes[5]) : DEFAULT_DIET;
   const mass = size * size;
   // Kleiber's law: metabolic rate grows with mass^0.75, so big bodies are cheaper per unit mass.
   const metabolic = cfg.sizeScaling ? mass ** 0.75 : mass;
@@ -120,6 +141,7 @@ export function bodyFromGenes(genes: Float32Array, cfg: SimConfig): Body {
     size,
     turnRate,
     insulation,
+    ...digestion(diet),
     basal,
     eatRadius: cfg.eatRadius * size,
     effTurn: turnRate / size,

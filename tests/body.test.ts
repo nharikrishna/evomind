@@ -40,6 +40,7 @@ describe("body genes", () => {
     const warm = makeConfig({ temperature: true });
     const base = bodyFromGenes(defaultGenes(), warm).basal;
     for (let i = 0; i < TRAITS.length; i++) {
+      if (TRAITS[i].key === "diet") continue; // diet's price is the digestion trade-off, not upkeep
       const g = defaultGenes();
       g[i] += 1;
       expect(bodyFromGenes(g, warm).basal).toBeGreaterThan(base);

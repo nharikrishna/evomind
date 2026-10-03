@@ -18,14 +18,16 @@ export interface BiomeSpec {
   mud: boolean;
   /** Sensor range multiplier. */
   fog: boolean;
+  /** Relative density of fruit trees. */
+  trees: number;
 }
 
 export const BIOMES: readonly BiomeSpec[] = [
-  { name: "Tundra", color: "#3987e5", growth: 0.6, temp: -1, mud: false, fog: false },
-  { name: "Forest", color: "#d95926", growth: 1.0, temp: 0, mud: false, fog: true },
-  { name: "Grassland", color: "#199e70", growth: 1.2, temp: 0.1, mud: false, fog: false },
-  { name: "Swamp", color: "#c98500", growth: 1.3, temp: 0.4, mud: true, fog: false },
-  { name: "Desert", color: "#d55181", growth: 0.5, temp: 1, mud: false, fog: false },
+  { name: "Tundra", color: "#3987e5", growth: 0.6, temp: -1, mud: false, fog: false, trees: 0.3 },
+  { name: "Forest", color: "#d95926", growth: 1.0, temp: 0, mud: false, fog: true, trees: 3 },
+  { name: "Grassland", color: "#199e70", growth: 1.2, temp: 0.1, mud: false, fog: false, trees: 0.6 },
+  { name: "Swamp", color: "#c98500", growth: 1.3, temp: 0.4, mud: true, fog: false, trees: 1.2 },
+  { name: "Desert", color: "#d55181", growth: 0.5, temp: 1, mud: false, fog: false, trees: 0.2 },
 ];
 export const GRASSLAND = 2;
 /** Highest growth multiplier: growth is normalised by it so acceptance stays ≤ 1. */

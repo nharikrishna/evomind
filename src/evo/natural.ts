@@ -36,6 +36,7 @@ export interface RegionSummary {
   speed: number;
   sensor: number;
   insulation: number;
+  diet: number;
   /** Biome base temperature (-1 very cold .. +1 very hot). */
   temp: number;
   /** Mean RMS genetic distance from this region's average genome to the other regions'. */
@@ -103,6 +104,9 @@ export interface NaturalStats extends TraitStats {
   biomeSpeed: number[];
   biomeSensor: number[];
   biomeInsulation: number[];
+  biomeDiet: number[];
+  /** Share of the living population's lifetime food energy that came from fruit. */
+  fruitShare: number;
   extinctions: number;
 }
 
@@ -416,7 +420,7 @@ export class NaturalEvolution {
         region, biome: r.biome, population: cs.length,
         species: counts.size, dominantSpecies: dominant, dominantShare: cs.length ? top / cs.length : 0,
         size: mean((c) => c.body.size), speed: mean((c) => c.body.maxSpeed), sensor: mean((c) => c.body.sensorRange),
-        insulation: mean((c) => c.body.insulation), temp: BIOMES[r.biome].temp,
+        insulation: mean((c) => c.body.insulation), diet: mean((c) => c.body.diet), temp: BIOMES[r.biome].temp,
         distance: me && others.length ? others.reduce((s, v) => s + geneticDistance(me, v), 0) / others.length : 0,
         x: r.x, y: r.y,
       };
@@ -555,23 +559,28 @@ export class NaturalEvolution {
     this.windowDeathAge = 0;
   }
 
-  private biomeStats(): Pick<NaturalStats, "biomePop" | "biomeSize" | "biomeSpeed" | "biomeSensor" | "biomeInsulation"> {
+  private biomeStats(): Pick<NaturalStats, "biomePop" | "biomeSize" | "biomeSpeed" | "biomeSensor" | "biomeInsulation" | "biomeDiet" | "fruitShare"> {
     const k = BIOMES.length;
     const pop = new Array<number>(k).fill(0), size = new Array<number>(k).fill(0);
     const speed = new Array<number>(k).fill(0), sensor = new Array<number>(k).fill(0);
-    const insul = new Array<number>(k).fill(0);
+    const insul = new Array<number>(k).fill(0), diet = new Array<number>(k).fill(0);
+    let fruit = 0, food = 0;
     for (const c of this.world.creatures) {
+      fruit += c.fruitEaten;
+      food += c.foodEaten;
       if (c.biome < 0) continue;
       pop[c.biome]++;
       size[c.biome] += c.body.size;
       speed[c.biome] += c.body.maxSpeed;
       sensor[c.biome] += c.body.sensorRange;
       insul[c.biome] += c.body.insulation;
+      diet[c.biome] += c.body.diet;
     }
     const mean = (a: number[]) => a.map((v, b) => (pop[b] ? v / pop[b] : 0));
     return {
       biomePop: pop, biomeSize: mean(size), biomeSpeed: mean(speed),
-      biomeSensor: mean(sensor), biomeInsulation: mean(insul),
+      biomeSensor: mean(sensor), biomeInsulation: mean(insul), biomeDiet: mean(diet),
+      fruitShare: food ? fruit / food : 0,
     };
   }
 

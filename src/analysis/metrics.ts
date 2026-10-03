@@ -55,11 +55,12 @@ export interface TraitStats {
   sizeMean: number; sizeSd: number;
   turnRateMean: number; turnRateSd: number;
   insulationMean: number; insulationSd: number;
+  dietMean: number; dietSd: number;
 }
 
 export function traitStats(genomes: readonly Genome[], cfg: SimConfig): TraitStats {
   const bodies = genomes.map((g) => (g.genes.body ? bodyFromGenes(g.genes.body, cfg) : defaultBody(cfg)));
-  const ms = (key: "maxSpeed" | "sensorRange" | "size" | "turnRate" | "insulation") => {
+  const ms = (key: "maxSpeed" | "sensorRange" | "size" | "turnRate" | "insulation" | "diet") => {
     const v = bodies.map((b) => b[key]);
     const mean = v.reduce((s, x) => s + x, 0) / v.length;
     const sd = Math.sqrt(v.reduce((s, x) => s + (x - mean) ** 2, 0) / v.length);
@@ -70,9 +71,10 @@ export function traitStats(genomes: readonly Genome[], cfg: SimConfig): TraitSta
   const [sizeMean, sizeSd] = ms("size");
   const [turnRateMean, turnRateSd] = ms("turnRate");
   const [insulationMean, insulationSd] = ms("insulation");
+  const [dietMean, dietSd] = ms("diet");
   return {
     maxSpeedMean, maxSpeedSd, sensorRangeMean, sensorRangeSd, sizeMean, sizeSd,
-    turnRateMean, turnRateSd, insulationMean, insulationSd,
+    turnRateMean, turnRateSd, insulationMean, insulationSd, dietMean, dietSd,
   };
 }
 

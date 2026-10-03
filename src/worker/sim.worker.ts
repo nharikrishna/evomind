@@ -19,7 +19,7 @@ import { NaturalEvolution, type NaturalRunFile } from "../evo/natural";
 import { genomeFromJSON } from "../analysis/history";
 import { BIOME_CELL, BIOMES } from "../sim/biomes";
 import {
-  CREATURE_STRIDE, C_AGE, C_ALIVE, C_ENERGY, C_HEADING, C_ID, C_INSULATION, C_MAXSPEED, C_RELATIVE, C_SENSOR, C_SIZE, C_SPECIES, C_X, C_Y,
+  CREATURE_STRIDE, C_AGE, C_ALIVE, C_DIET, C_ENERGY, C_HEADING, C_ID, C_INSULATION, C_MAXSPEED, C_RELATIVE, C_SENSOR, C_SIZE, C_SPECIES, C_X, C_Y,
   type FromWorker, type SceneKind, type SelectedSnap, type Terrain, type ToWorker, type WorldSnap,
 } from "./protocol";
 
@@ -314,6 +314,7 @@ function snapWorld(v: View, relativeOf: number | null): WorldSnap {
     creatures[o + C_AGE] = c.age;
     creatures[o + C_SENSOR] = c.body.sensorRange;
     creatures[o + C_INSULATION] = c.body.insulation;
+    creatures[o + C_DIET] = c.body.diet;
     creatures[o + C_SPECIES] = nat && w === nat.world && gid !== null ? (nat.speciesOf(gid) ?? -1) : -1;
     eaten += c.foodEaten;
   }
@@ -338,6 +339,7 @@ function snapWorld(v: View, relativeOf: number | null): WorldSnap {
     food,
     fertility: w.fertility && !w.vegetation ? { cols: w.fertility.cols, rows: w.fertility.rows, values: Array.from(w.fertility.values) } : null,
     vegetation: w.vegetation ? vegetationSnap(w) : null,
+    trees: Float32Array.from(w.trees.flatMap((t) => [t.x, t.y])),
     ...terrainFor(w),
   };
 }
@@ -395,12 +397,14 @@ function snapSelected(): { snap: SelectedSnap | null; relativeOf: number | null 
         size: c.body.size,
         turnRate: c.body.turnRate,
         insulation: c.body.insulation,
+        diet: c.body.diet,
         basal: c.body.basal,
         maxEnergy: c.body.maxEnergy,
         evolved: !!g?.genes.body,
       },
       thermalSpent: c.thermalSpent,
       crowding: c.crowding,
+      fruitEaten: c.fruitEaten,
       lifeHistory: g?.genes.repro ? decodeRepro(g.genes.repro) : null,
       brain: brain && {
         shape: brain.shape,

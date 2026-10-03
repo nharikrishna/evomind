@@ -13,7 +13,7 @@ import type { BrainShape } from "../brain/genome";
 export type SceneKind = "evolve" | "best" | "compare";
 
 /** Per-creature floats in WorldSnap.creatures. */
-export const CREATURE_STRIDE = 13;
+export const CREATURE_STRIDE = 14;
 export const C_X = 0, C_Y = 1, C_HEADING = 2, C_ENERGY = 3, C_ALIVE = 4, C_RELATIVE = 5, C_SIZE = 6,
   /** Stable creature id (populations change, so selection is by id, not index). */
   C_ID = 7,
@@ -26,7 +26,9 @@ export const C_X = 0, C_Y = 1, C_HEADING = 2, C_ENERGY = 3, C_ALIVE = 4, C_RELAT
   /** Species id (-1 = unknown / lab mode). */
   C_SPECIES = 11,
   /** Body insulation 0..1 (for colour-by-trait). */
-  C_INSULATION = 12;
+  C_INSULATION = 12,
+  /** Diet 0 = grazer .. 1 = fruit-eater (for colour-by-trait). */
+  C_DIET = 13;
 
 /** Static map of a biome world: sent once per world, then referenced by `mapId`. */
 export interface Terrain {
@@ -58,6 +60,8 @@ export interface WorldSnap {
   food: Float32Array;
   /** Plant food model: coarse fertility grid (0..1), drawn as a ground tint. */
   fertility: { cols: number; rows: number; values: number[] } | null;
+  /** Fruit tree positions as x, y pairs (empty without fruit). */
+  trees: Float32Array;
   /** Vegetation model: biomass per cell, 0..255 of full capacity (sent every frame; small). */
   vegetation: { cols: number; rows: number; cell: number; values: Uint8Array } | null;
   /** Id of this world's biome map (null = no biomes). */
@@ -88,13 +92,15 @@ export interface SelectedSnap {
   /** Species id (null in lab mode). */
   species: number | null;
   body: {
-    maxSpeed: number; sensorRange: number; size: number; turnRate: number; insulation: number;
+    maxSpeed: number; sensorRange: number; size: number; turnRate: number; insulation: number; diet: number;
     basal: number; maxEnergy: number; evolved: boolean;
   };
   /** Lifetime energy spent staying warm or cool. */
   thermalSpent: number;
   /** Neighbours nearby (crowding). */
   crowding: number;
+  /** Lifetime fruit eaten, in meals (0 without fruit). */
+  fruitEaten: number;
   lifeHistory: { reproThreshold: number; offspringShare: number } | null;
   brain: {
     shape: BrainShape;

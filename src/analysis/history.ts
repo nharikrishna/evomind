@@ -5,7 +5,7 @@ const COLUMNS: (keyof GenerationStats)[] = [
   "generation", "best", "mean", "median", "bestEver",
   "alignment", "towardFood", "meanFood", "meanLifespan", "survivors", "meanSpeed", "diversity",
   "maxSpeedMean", "maxSpeedSd", "sensorRangeMean", "sensorRangeSd",
-  "sizeMean", "sizeSd", "turnRateMean", "turnRateSd", "insulationMean", "insulationSd",
+  "sizeMean", "sizeSd", "turnRateMean", "turnRateSd", "insulationMean", "insulationSd", "dietMean", "dietSd",
 ];
 
 export function historyToCSV(history: readonly GenerationStats[]): string {

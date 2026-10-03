@@ -128,6 +128,20 @@ export interface SimConfig {
    */
   intakeScaling: boolean;
 
+  // Fruit (Phase 6c step 3: diet)
+  /** Fruit trees produce fruit (a second food type, with the diet/digestion trait). */
+  fruit: boolean;
+  /** Number of fruit trees (placed by biome and fertility). */
+  fruitTrees: number;
+  /** Fruit slots per tree. */
+  fruitPerTree: number;
+  /** Per-tick chance an empty slot ripens, at the peak of the fruiting season. */
+  fruitRate: number;
+  /** Ticks before uneaten fruit rots. */
+  fruitLife: number;
+  /** Typical distance (px) of fruit from its tree. */
+  fruitSpread: number;
+
   // Creature body
   maxEnergy: number;
   initialEnergy: number;
@@ -285,6 +299,14 @@ export const DEFAULT_CONFIG: SimConfig = {
   satiety: false,
   intakeScaling: false,
 
+  fruit: false,
+  // Fruit adds a new food source on top of grass, so the world gets somewhat richer, as it would.
+  fruitTrees: 80,
+  fruitPerTree: 3,
+  fruitRate: 0.01,
+  fruitLife: 2000,
+  fruitSpread: 15,
+
   maxEnergy: 100,
   initialEnergy: 60,
   basalCost: 0.05,
@@ -402,4 +424,6 @@ export const GEOGRAPHY_PRESET: Partial<SimConfig> = {
   satiety: true,
   // Bigger mouth and gut: intake ∝ metabolic size (bodies were collapsing to minimum size without it).
   intakeScaling: true,
+  // A second food source: fruit trees (dense in forest, seasonal, fruit rots) + the diet trait.
+  fruit: true,
 };

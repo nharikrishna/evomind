@@ -58,6 +58,8 @@ const SECTIONS: [string, Field[]][] = [
     { key: "foodModel", label: "Food model", choices: [["vegetation", "Vegetation (ground cover)"], ["plants", "Plant items (patches)"], ["random", "Random scatter"]] },
     { key: "satiety", label: "Satiety (no eating when full)", bool: true },
     { key: "intakeScaling", label: "Intake scales with size", bool: true },
+    { key: "fruit", label: "Fruit trees (diet)", bool: true },
+    { key: "fruitTrees", label: "Fruit trees", step: 10, min: 0, max: 1000, int: true },
     { key: "vegGrowth", label: "Vegetation growth rate", step: 0.0005, min: 0 },
     { key: "vegCapacity", label: "Vegetation per cell", step: 5, min: 1 },
     { key: "fertilityScale", label: "Fertile patch size (px)", step: 20, min: 40 },

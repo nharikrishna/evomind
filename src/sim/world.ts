@@ -41,6 +41,8 @@ export interface World {
   creatureGrid: TorusGrid | null;
   /** Vegetation food model: living ground cover (null for item-based food). */
   vegetation: Vegetation | null;
+  /** Fruit trees (fruit items in `food` belong to them); empty without fruit. */
+  trees: { x: number; y: number }[];
   readonly enforceNeuralPrey: boolean;
 }
 
@@ -78,6 +80,7 @@ export function newCreature(world: World, x: number, y: number, heading: number)
     region: -1,
     thermalSpent: 0,
     crowding: 0,
+    fruitEaten: 0,
     distanceTraveled: 0,
     energySpent: 0,
     alignmentSum: 0,
@@ -140,10 +143,31 @@ export function createWorld(
     // Plants seed the initial meadow from each other, so it starts out patchy.
     const pos = fertility ? sproutPosition(config, fertility, placed, rng, biomeMap) : { x: rng.range(0, config.width), y: rng.range(0, config.height) };
     const growth = fertility ? localGrowth(fertility, biomeMap, pos.x, pos.y) : 1;
-    const f: Food = { id: i, x: pos.x, y: pos.y, energy: config.foodEnergy, active: true, growth };
+    const f: Food = { id: i, x: pos.x, y: pos.y, energy: config.foodEnergy, active: true, growth, tree: -1, age: 0 };
     if (fertility) placed.push(f.x, f.y);
     food.push(f);
     foodGrid.insert(i, f.x, f.y);
+  }
+
+  // Fruit trees (with vegetation ground cover): denser in forest, sparse in tundra and desert,
+  // more on fertile soil, never on rivers or ridges. Fruit items hang around their tree.
+  const trees: { x: number; y: number }[] = [];
+  if (veg && config.fruit) {
+    const maxDensity = Math.max(...BIOMES.map((b) => b.trees));
+    for (let tries = 0; trees.length < config.fruitTrees && tries < config.fruitTrees * 200; tries++) {
+      const x = rng.range(0, config.width), y = rng.range(0, config.height);
+      if (biomeMap && config.barriers && biomeMap.barrierAt(x, y) !== 0) continue;
+      const density = (biomeMap ? BIOMES[biomeMap.at(x, y)].trees / maxDensity : 1) * (fertility ? fertility.at(x, y) : 1);
+      if (rng.next() < density) trees.push({ x, y });
+    }
+    trees.forEach((t, k) => {
+      for (let s = 0; s < config.fruitPerTree; s++) {
+        const id = food.length;
+        const f: Food = { id, x: t.x, y: t.y, energy: config.foodEnergy, active: false, growth: 1, tree: k, age: 0 };
+        food.push(f);
+        if (rng.next() < 0.5) ripen(f, t, config, rng, biomeMap, foodGrid);
+      }
+    });
   }
 
   const world: World = {
@@ -162,6 +186,7 @@ export function createWorld(
     biomeMap,
     creatureGrid: config.crowding || config.senseCrowd ? new TorusGrid(config.width, config.height, 50) : null,
     vegetation,
+    trees,
     enforceNeuralPrey,
   };
 
@@ -170,6 +195,35 @@ export function createWorld(
     addCreature(world, c, makeController(c, i, rng, config));
   }
   return world;
+}
+
+/** A fruit ripens on its tree: placed nearby (not in rivers), full of energy, age 0. */
+function ripen(f: Food, tree: { x: number; y: number }, cfg: SimConfig, rng: Rng, biomes: BiomeMap | null, grid: TorusGrid): void {
+  let x = tree.x, y = tree.y;
+  for (let t = 0; t < 4; t++) {
+    const nx = wrapCoord(tree.x + rng.gaussian() * cfg.fruitSpread, cfg.width);
+    const ny = wrapCoord(tree.y + rng.gaussian() * cfg.fruitSpread, cfg.height);
+    if (!biomes || !cfg.barriers || biomes.barrierAt(nx, ny) === 0) {
+      x = nx;
+      y = ny;
+      break;
+    }
+  }
+  f.x = x;
+  f.y = y;
+  f.energy = cfg.foodEnergy;
+  f.age = 0;
+  f.active = true;
+  grid.insert(f.id, x, y);
+}
+
+/**
+ * How much fruit is ripening at this point of the year: peaks in late summer /
+ * autumn, none in winter and spring. Constant 0.5 without seasons.
+ */
+export function fruitSeason(cfg: SimConfig, tick: number): number {
+  if (cfg.seasonLength <= 0) return 0.5;
+  return Math.max(0, Math.sin(2 * Math.PI * (tick / cfg.seasonLength - 0.125)));
 }
 
 /** How well plants grow at a spot: fertility × biome growth. */
@@ -261,6 +315,13 @@ export function step(world: World): void {
         here,
       };
     }
+    if (world.trees.length) {
+      const fi = foodGrid.nearest(c.x, c.y, range);
+      const fr = fi >= 0 ? food[fi] : null;
+      extra ??= { nearAmount: 0, rich: null, crowd: nb };
+      extra.fruit = fr ? { x: fr.x, y: fr.y, distSq: foodGrid.foundDistSq } : null;
+      world.nearestFood[i] = fi;
+    }
     sensePrey(c, near, nf ? nf.x : 0, nf ? nf.y : 0, nearDistSq, cfg, sensors, range, biomeIdx >= 0 ? biomeIdx : GRASSLAND, extra);
     // Stats use the true bearing; the brain gets the (possibly noisy) reading.
     const trueCos = sensors[1];
@@ -317,12 +378,29 @@ export function step(world: World): void {
     const room = cfg.satiety ? Math.max(0, body.maxEnergy - c.energy) : Infinity;
     // Intake scales with metabolic size (mass^0.75 = size^1.5): bigger mouth and gut.
     const mouth = cfg.intakeScaling ? body.size ** 1.5 : 1;
+    // Digestion: with fruit in the world, a gut extracts only part of each food's energy.
+    const grassEff = cfg.fruit ? body.grassEff : 1;
     if (veg) {
       // Graze the cell you stand on; you can't graze well at a gallop.
-      const want = Math.min(room, cfg.vegBite * mouth * (1 - 0.8 * Math.min(1, c.speed / body.maxSpeed)));
+      const want = Math.min(room / grassEff, cfg.vegBite * mouth * (1 - 0.8 * Math.min(1, c.speed / body.maxSpeed)));
       const take = want > 0 ? veg.graze(c.x, c.y, want) : 0;
-      c.energy += take;
-      c.foodEaten += take / cfg.foodEnergy;
+      c.energy += take * grassEff;
+      c.foodEaten += (take * grassEff) / cfg.foodEnergy;
+      // Fruit: eat a whole fruit if there's room for at least half of what it gives.
+      const fi = world.trees.length && room > 0 ? foodGrid.nearest(c.x, c.y, body.eatRadius) : -1;
+      if (fi >= 0) {
+        const f = food[fi];
+        const gain = f.energy * body.fruitEff;
+        const space = Math.max(0, body.maxEnergy - c.energy);
+        if (!cfg.satiety || space >= gain / 2) {
+          const got = Math.min(gain, cfg.satiety ? space : gain);
+          c.energy += got;
+          c.foodEaten += got / cfg.foodEnergy;
+          c.fruitEaten += got / cfg.foodEnergy;
+          f.active = false;
+          foodGrid.remove(fi);
+        }
+      }
     }
     let bite = veg || room <= 0 ? -1 : foodGrid.nearest(c.x, c.y, body.eatRadius);
     // Whole food items are indivisible: with satiety, only eat one if there's room for at least half of it.
@@ -362,6 +440,23 @@ export function step(world: World): void {
   if (cfg.plantBiomass) {
     const k = cfg.foodEnergy, r = cfg.plantGrowth * season * world.foodBoost;
     for (const f of food) if (f.active) f.energy = Math.min(k, f.energy + r * f.growth * f.energy * (1 - f.energy / k));
+  }
+
+  // Fruit: ripe fruit rots after fruitLife; empty slots ripen with the fruiting season.
+  if (world.trees.length) {
+    const ripenP = Math.min(1, cfg.fruitRate * fruitSeason(cfg, world.tick) * world.foodBoost);
+    for (const f of food) {
+      if (f.active) {
+        if (++f.age > cfg.fruitLife) {
+          f.active = false;
+          foodGrid.remove(f.id);
+        }
+      } else if (ripenP > 0 && world.rng.next() < ripenP) {
+        ripen(f, world.trees[f.tree], cfg, world.rng, world.biomeMap, foodGrid);
+      }
+    }
+    world.tick++;
+    return;
   }
 
   // New sprouts in empty slots (scaled by season and any environment shift)

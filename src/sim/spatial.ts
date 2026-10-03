@@ -57,20 +57,23 @@ export class TorusGrid {
     this.cellOf.length = 0;
   }
 
-  /** Number of items within r of (x, y), not counting `exclude`. */
-  countWithin(x: number, y: number, r: number, exclude = -1): number {
+  /**
+   * Visit every item within r of (x, y) (toroidal), except `exclude`, with its
+   * offset (dx, dy) and squared distance. Each cell is visited at most once even
+   * when the window wraps around a small grid.
+   */
+  scanWithin(x: number, y: number, r: number, exclude: number, visit: (i: number, dx: number, dy: number, d2: number) => void): void {
     const { cols, rows, cells, px, py, width: W, height: H } = this;
-    const rc = Math.min(Math.ceil(r / this.cellW), cols >> 1);
-    const rr = Math.min(Math.ceil(r / this.cellH), rows >> 1);
+    const rc = Math.ceil(r / this.cellW), rr = Math.ceil(r / this.cellH);
+    const cSpan = Math.min(2 * rc + 1, cols), rSpan = Math.min(2 * rr + 1, rows);
     const c0 = Math.min(cols - 1, Math.floor(x / this.cellW));
     const r0 = Math.min(rows - 1, Math.floor(y / this.cellH));
     const halfW = W / 2, halfH = H / 2, r2 = r * r;
-    let n = 0;
-    for (let dr = -rr; dr <= rr; dr++) {
-      let row = (r0 + dr) % rows;
+    for (let a = 0; a < rSpan; a++) {
+      let row = (r0 - rr + a) % rows;
       if (row < 0) row += rows;
-      for (let dc = -rc; dc <= rc; dc++) {
-        let col = (c0 + dc) % cols;
+      for (let b = 0; b < cSpan; b++) {
+        let col = (c0 - rc + b) % cols;
         if (col < 0) col += cols;
         const cell = cells[row * cols + col];
         for (let k = 0; k < cell.length; k++) {
@@ -80,11 +83,43 @@ export class TorusGrid {
           if (dx > halfW) dx -= W; else if (dx < -halfW) dx += W;
           let dy = py[i] - y;
           if (dy > halfH) dy -= H; else if (dy < -halfH) dy += H;
-          if (dx * dx + dy * dy <= r2) n++;
+          const d2 = dx * dx + dy * dy;
+          if (d2 <= r2) visit(i, dx, dy, d2);
         }
       }
     }
+  }
+
+  /** Number of items within r of (x, y), not counting `exclude`. */
+  countWithin(x: number, y: number, r: number, exclude = -1): number {
+    let n = 0;
+    this.scanWithin(x, y, r, exclude, () => n++);
     return n;
+  }
+
+  /** Neighbours within r: how many, and the mean offset towards them (0, 0 if none). */
+  neighbours(x: number, y: number, r: number, exclude = -1): { n: number; dx: number; dy: number } {
+    let n = 0, sx = 0, sy = 0;
+    this.scanWithin(x, y, r, exclude, (_i, dx, dy) => {
+      n++;
+      sx += dx;
+      sy += dy;
+    });
+    return n ? { n, dx: sx / n, dy: sy / n } : { n: 0, dx: 0, dy: 0 };
+  }
+
+  /** The item within r with the highest value (ties: nearer wins), or -1. */
+  bestWithin(x: number, y: number, r: number, value: (i: number) => number): number {
+    let best = -1, bestV = -Infinity, bestD = Infinity;
+    this.scanWithin(x, y, r, -1, (i, _dx, _dy, d2) => {
+      const v = value(i);
+      if (v > bestV || (v === bestV && d2 < bestD)) {
+        best = i;
+        bestV = v;
+        bestD = d2;
+      }
+    });
+    return best;
   }
 
   remove(item: number): void {

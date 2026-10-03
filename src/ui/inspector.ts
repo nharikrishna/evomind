@@ -19,7 +19,7 @@ export function renderInspector(host: HTMLElement, s: SelectedSnap | null): void
     ...(s.species !== null ? ([["Species", `S${s.species}`]] as [string, string][]) : []),
     ["Energy", `${s.energy.toFixed(1)} / ${s.body.maxEnergy.toFixed(0)}`],
     ["Speed", s.speed.toFixed(2)],
-    ["Food eaten", String(s.foodEaten)],
+    ["Food eaten", Number.isInteger(s.foodEaten) ? String(s.foodEaten) : `${s.foodEaten.toFixed(1)} meals`],
     ["Age", `${s.age.toLocaleString()} ticks`],
     ...(s.lifeHistory ? ([["Children", String(s.children)]] as [string, string][]) : []),
     ["Distance", s.distanceTraveled.toFixed(0)],

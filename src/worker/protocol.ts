@@ -58,6 +58,8 @@ export interface WorldSnap {
   food: Float32Array;
   /** Plant food model: coarse fertility grid (0..1), drawn as a ground tint. */
   fertility: { cols: number; rows: number; values: number[] } | null;
+  /** Vegetation model: biomass per cell, 0..255 of full capacity (sent every frame; small). */
+  vegetation: { cols: number; rows: number; cell: number; values: Uint8Array } | null;
   /** Id of this world's biome map (null = no biomes). */
   mapId: number | null;
   /** The biome map itself, included only the first time a mapId is sent. */
@@ -96,6 +98,8 @@ export interface SelectedSnap {
   lifeHistory: { reproThreshold: number; offspringShare: number } | null;
   brain: {
     shape: BrainShape;
+    /** Input names, in order (depend on which senses are switched on). */
+    labels: string[];
     weights: Float32Array;
     inputs: Float32Array;
     hidden: Float32Array;

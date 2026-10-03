@@ -4,7 +4,6 @@ type BrainData = NonNullable<SelectedSnap["brain"]>;
 
 const POS = [57, 135, 229];
 const NEG = [230, 103, 103];
-const INPUT_LABELS = ["food L/R", "food ahead", "food near", "energy", "own speed"];
 const OUTPUT_LABELS = ["turn", "thrust"];
 
 function rgba(c: number[], a: number): string {
@@ -18,16 +17,19 @@ function rgba(c: number[], a: number): string {
 export class BrainView {
   private ctx: CanvasRenderingContext2D;
   private cssW = 0;
-  private readonly cssH = 210;
+  private cssH = 210;
 
   constructor(private canvas: HTMLCanvasElement) {
     this.ctx = canvas.getContext("2d")!;
   }
 
-  private fit(): void {
+  /** Width follows the panel; height grows with the number of inputs (two text lines each). */
+  private fit(inputs = 0): void {
     const w = this.canvas.parentElement!.clientWidth;
-    if (w === this.cssW) return;
+    const h = Math.max(210, inputs * 27 + 14);
+    if (w === this.cssW && h === this.cssH) return;
     this.cssW = w;
+    this.cssH = h;
     const dpr = window.devicePixelRatio || 1;
     this.canvas.style.width = `${w}px`;
     this.canvas.style.height = `${this.cssH}px`;
@@ -47,7 +49,7 @@ export class BrainView {
   }
 
   draw(b: BrainData): void {
-    this.fit();
+    this.fit(b.shape.inputs);
     const { ctx, cssW: W, cssH: H } = this;
     const { inputs: ni, hidden: nh, outputs: no } = b.shape;
     const w = b.weights;
@@ -55,7 +57,7 @@ export class BrainView {
     const w2 = (o: number, h: number) => w[nh * ni + nh + o * nh + h];
     ctx.clearRect(0, 0, W, H);
 
-    const xIn = 74, xHid = W / 2 + 8, xOut = W - 58;
+    const xIn = 96, xHid = (xIn + W - 58) / 2, xOut = W - 58;
     const ys = (n: number) => Array.from({ length: n }, (_, k) => ((k + 1) * H) / (n + 1));
     const yIn = ys(ni), yHid = ys(nh), yOut = ys(no);
 
@@ -89,7 +91,7 @@ export class BrainView {
       node(xIn, yIn[i], b.inputs[i]);
       ctx.textAlign = "right";
       ctx.fillStyle = "#ffffff";
-      ctx.fillText(INPUT_LABELS[i] ?? `in ${i}`, xIn - 12, yIn[i] - 6);
+      ctx.fillText(b.labels[i] ?? `in ${i}`, xIn - 12, yIn[i] - 6);
       ctx.fillStyle = "#898781";
       ctx.fillText(b.inputs[i].toFixed(2), xIn - 12, yIn[i] + 7);
     }

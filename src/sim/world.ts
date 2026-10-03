@@ -3,10 +3,11 @@ import type { Action, Creature, Food } from "./types";
 import type { Controller } from "./controllers";
 import { Rng } from "./rng";
 import { TorusGrid } from "./spatial";
-import { preySensorCount, sensePrey } from "./sensors";
+import { preySensorCount, sensePrey, type ExtraSenses } from "./sensors";
 import { clamp, wrapAngle, wrapCoord } from "./math";
 import { defaultBody, type Body } from "./body";
 import { FertilityMap, sproutPosition } from "./food";
+import { Vegetation } from "./vegetation";
 import { seasonFactor } from "./seasons";
 import { BiomeMap, BIOMES, GRASSLAND, MOUNTAIN, RIVER } from "./biomes";
 
@@ -38,6 +39,8 @@ export interface World {
   biomeMap: BiomeMap | null;
   /** Crowding only: creature positions, rebuilt every tick for neighbour counts. */
   creatureGrid: TorusGrid | null;
+  /** Vegetation food model: living ground cover (null for item-based food). */
+  vegetation: Vegetation | null;
   readonly enforceNeuralPrey: boolean;
 }
 
@@ -127,11 +130,13 @@ export function createWorld(
   const rng = new Rng(config.seed);
   const foodGrid = new TorusGrid(config.width, config.height, 100);
 
-  const fertility = config.foodModel === "plants" ? new FertilityMap(config.width, config.height, config) : null;
+  const veg = config.foodModel === "vegetation";
+  const fertility = config.foodModel === "plants" || veg ? new FertilityMap(config.width, config.height, config) : null;
   const biomeMap = config.biomes ? new BiomeMap(config.width, config.height, config) : null;
+  const vegetation = veg ? new Vegetation(config.width, config.height, config, fertility, biomeMap) : null;
   const food: Food[] = [];
   const placed: number[] = [];
-  for (let i = 0; i < config.foodCount; i++) {
+  for (let i = 0; i < (veg ? 0 : config.foodCount); i++) {
     // Plants seed the initial meadow from each other, so it starts out patchy.
     const pos = fertility ? sproutPosition(config, fertility, placed, rng, biomeMap) : { x: rng.range(0, config.width), y: rng.range(0, config.height) };
     const growth = fertility ? localGrowth(fertility, biomeMap, pos.x, pos.y) : 1;
@@ -155,7 +160,8 @@ export function createWorld(
     fertility,
     foodBoost: 1,
     biomeMap,
-    creatureGrid: config.crowding ? new TorusGrid(config.width, config.height, 50) : null,
+    creatureGrid: config.crowding || config.senseCrowd ? new TorusGrid(config.width, config.height, 50) : null,
+    vegetation,
     enforceNeuralPrey,
   };
 
@@ -197,6 +203,7 @@ export function thermalCost(cfg: SimConfig, tick: number, biomeTemp: number, bod
 }
 
 const action: Action = { turn: 0, thrust: 0 };
+const NO_NEIGHBOURS = { n: 0, dx: 0, dy: 0 };
 /** Below this speed a creature counts as "not moving" for alignment stats. */
 const MOVING_SPEED = 0.1;
 /** cos(25 deg): heading counts as "toward food" inside this cone. */
@@ -226,11 +233,35 @@ export function step(world: World): void {
     c.region = world.biomeMap ? world.biomeMap.regionAt(c.x, c.y) : -1;
     const terrain = world.biomeMap && cfg.barriers ? world.biomeMap.barrierAt(c.x, c.y) : 0;
     const range = biome?.fog ? body.sensorRange * cfg.fogFactor : body.sensorRange;
-    const near = foodGrid.nearest(c.x, c.y, range);
-    world.nearestFood[i] = near;
+    const veg = world.vegetation;
+    // Vegetation: "nearest food" becomes the richest vegetation within range (a sight/smell gradient).
+    const rich = veg ? veg.richest(c.x, c.y, range) : null;
+    const near = veg ? (rich ? 0 : -1) : foodGrid.nearest(c.x, c.y, range);
+    world.nearestFood[i] = veg ? -1 : near;
     const sensors = sensorViews[i];
-    const nf = near >= 0 ? food[near] : null;
-    sensePrey(c, near, nf ? nf.x : 0, nf ? nf.y : 0, foodGrid.foundDistSq, cfg, sensors, range, biomeIdx >= 0 ? biomeIdx : GRASSLAND);
+    const nf = veg ? (rich ? { x: wrapCoord(c.x + rich.dx, cfg.width), y: wrapCoord(c.y + rich.dy, cfg.height), energy: rich.amount } : null) : near >= 0 ? food[near] : null;
+    const nearDistSq = veg ? (rich ? rich.dx * rich.dx + rich.dy * rich.dy : Infinity) : foodGrid.foundDistSq;
+    // Neighbours (positions at the start of the tick): crowding stress, breeding, crowd sense.
+    const nb = crowd ? crowd.neighbours(c.x, c.y, cfg.crowdRadius, i) : NO_NEIGHBOURS;
+    c.crowding = nb.n;
+    let extra: ExtraSenses | null = null;
+    if (cfg.senseFoodAmount || cfg.senseCrowd || veg) {
+      let richest: ExtraSenses["rich"] = null;
+      if (cfg.senseFoodAmount && veg) {
+        if (nf) richest = { x: nf.x, y: nf.y, amount: nf.energy / cfg.vegCapacity };
+      } else if (cfg.senseFoodAmount) {
+        const ri = foodGrid.bestWithin(c.x, c.y, range, (k) => food[k].energy);
+        if (ri >= 0) richest = { x: food[ri].x, y: food[ri].y, amount: food[ri].energy / cfg.foodEnergy };
+      }
+      const here = veg ? Math.min(1, veg.at(c.x, c.y) / cfg.vegCapacity) : undefined;
+      extra = {
+        nearAmount: veg ? (here ?? 0) : nf ? nf.energy / cfg.foodEnergy : 0,
+        rich: richest,
+        crowd: nb,
+        here,
+      };
+    }
+    sensePrey(c, near, nf ? nf.x : 0, nf ? nf.y : 0, nearDistSq, cfg, sensors, range, biomeIdx >= 0 ? biomeIdx : GRASSLAND, extra);
     // Stats use the true bearing; the brain gets the (possibly noisy) reading.
     const trueCos = sensors[1];
     if (cfg.sensorNoise > 0) {
@@ -268,8 +299,7 @@ export function step(world: World): void {
     const mud = (biome?.mud ? cfg.mudFactor : 1) * (terrain === MOUNTAIN ? cfg.mountainCost : 1);
     const thermal = biome && cfg.temperature ? thermalCost(cfg, world.tick, biome.temp, body, c.speed) : 0;
     // Crowding stress: each neighbour beyond the tolerance costs a little extra upkeep.
-    c.crowding = crowd ? crowd.countWithin(c.x, c.y, cfg.crowdRadius, i) : 0;
-    const stress = crowd ? cfg.crowdStress * Math.max(0, c.crowding - cfg.crowdTolerance) : 0;
+    const stress = cfg.crowding ? cfg.crowdStress * Math.max(0, c.crowding - cfg.crowdTolerance) : 0;
     const cost = body.basal * aging + thermal + stress + cfg.moveCost * body.moveFactor * c.speed * c.speed * mud;
     c.thermalSpent += thermal;
     c.energy -= cost;
@@ -283,13 +313,23 @@ export function step(world: World): void {
       if (trueCos > TOWARD_FOOD_COS) c.ticksTowardFood++;
     }
 
-    // Eating
-    const bite = foodGrid.nearest(c.x, c.y, body.eatRadius);
+    // Eating. With satiety you can only take in what you have room for.
+    const room = cfg.satiety ? Math.max(0, body.maxEnergy - c.energy) : Infinity;
+    if (veg) {
+      // Graze the cell you stand on; you can't graze well at a gallop.
+      const want = Math.min(room, cfg.vegBite * (1 - 0.8 * Math.min(1, c.speed / body.maxSpeed)));
+      const take = want > 0 ? veg.graze(c.x, c.y, want) : 0;
+      c.energy += take;
+      c.foodEaten += take / cfg.foodEnergy;
+    }
+    let bite = veg || room <= 0 ? -1 : foodGrid.nearest(c.x, c.y, body.eatRadius);
+    // Whole food items are indivisible: with satiety, only eat one if there's room for at least half of it.
+    if (bite >= 0 && cfg.satiety && !cfg.plantBiomass && room < food[bite].energy / 2) bite = -1;
     if (bite >= 0) {
       const f = food[bite];
       if (cfg.plantBiomass) {
         // Graze: one bite per tick; the plant shrinks and dies only if eaten to nothing.
-        const take = Math.min(f.energy, cfg.biteSize);
+        const take = Math.min(f.energy, cfg.biteSize, room);
         c.energy = Math.min(body.maxEnergy, c.energy + take);
         c.foodEaten += take / cfg.foodEnergy;
         f.energy -= take;
@@ -315,6 +355,8 @@ export function step(world: World): void {
 
   // Standing plants regrow logistically from what's left (slow when tiny, fastest at half size).
   const season = seasonFactor(cfg, world.tick);
+  // Ground cover: growth follows the season; winter also lowers capacity (die-back).
+  world.vegetation?.grow(cfg, season * world.foodBoost, Math.min(1, season));
   if (cfg.plantBiomass) {
     const k = cfg.foodEnergy, r = cfg.plantGrowth * season * world.foodBoost;
     for (const f of food) if (f.active) f.energy = Math.min(k, f.energy + r * f.growth * f.energy * (1 - f.energy / k));

@@ -15,7 +15,20 @@ export const PREY_SENSORS = ["foodSin", "foodCos", "foodNear", "energy", "speed"
  * biome map, which then reads as grassland, so brains stay compatible).
  */
 export function preySensorCount(cfg: SimConfig): number {
-  return 4 + (cfg.senseSpeed ? 1 : 0) + (cfg.biomeSense ? BIOMES.length : 0);
+  return 4 + (cfg.senseSpeed ? 1 : 0) + (cfg.biomeSense ? BIOMES.length : 0)
+    + (cfg.senseFoodAmount ? 4 : 0) + (cfg.senseCrowd ? 3 : 0);
+}
+
+/** Optional extra perceptions (each only used when its sense is switched on). */
+export interface ExtraSenses {
+  /** Energy in the nearest plant, as a fraction of a full plant (0 if none). */
+  nearAmount: number;
+  /** Richest plant in range (null if none). */
+  rich: { x: number; y: number; amount: number } | null;
+  /** Neighbours: count and mean offset towards them. */
+  crowd: { n: number; dx: number; dy: number };
+  /** Vegetation model: food where I stand (0..1); replaces "food near". */
+  here?: number;
 }
 
 /** Human-readable input names, in order (for the brain view). */
@@ -23,6 +36,8 @@ export function preySensorLabels(cfg: SimConfig): string[] {
   const out = ["food L/R", "food ahead", "food near", "energy"];
   if (cfg.senseSpeed) out.push("own speed");
   if (cfg.biomeSense) out.push(...BIOMES.map((b) => `in ${b.name.toLowerCase()}`));
+  if (cfg.senseFoodAmount) out.push("food amount", "richest L/R", "richest ahead", "richest amount");
+  if (cfg.senseCrowd) out.push("crowding", "crowd L/R", "crowd ahead");
   return out;
 }
 
@@ -42,6 +57,7 @@ export function sensePrey(
   range: number = c.body.sensorRange,
   /** Biome the creature is in (for the one-hot biome inputs). */
   biome = 0,
+  extra: ExtraSenses | null = null,
 ): void {
   if (foodIndex >= 0) {
     const dx = torusDelta(c.x, foodX, cfg.width);
@@ -55,9 +71,32 @@ export function sensePrey(
     out[1] = 0;
     out[2] = 0;
   }
+  if (extra?.here !== undefined) out[2] = extra.here;
   out[3] = c.energy / c.body.maxEnergy;
   let k = 4;
   // Proprioception: how fast am I going, relative to my top speed?
   if (cfg.senseSpeed) out[k++] = c.speed / c.body.maxSpeed;
   if (cfg.biomeSense) for (let b = 0; b < BIOMES.length; b++) out[k++] = b === biome ? 1 : 0;
+  if (cfg.senseFoodAmount) {
+    out[k++] = extra ? extra.nearAmount : 0;
+    if (extra?.rich) {
+      const rel = wrapAngle(Math.atan2(torusDelta(c.y, extra.rich.y, cfg.height), torusDelta(c.x, extra.rich.x, cfg.width)) - c.heading);
+      out[k++] = Math.sin(rel);
+      out[k++] = Math.cos(rel);
+      out[k++] = extra.rich.amount;
+    } else {
+      out[k++] = 0; out[k++] = 0; out[k++] = 0;
+    }
+  }
+  if (cfg.senseCrowd) {
+    const cr = extra?.crowd;
+    out[k++] = cr ? Math.min(1, cr.n / (2 * cfg.crowdTolerance)) : 0;
+    if (cr && cr.n > 0 && (cr.dx !== 0 || cr.dy !== 0)) {
+      const rel = wrapAngle(Math.atan2(cr.dy, cr.dx) - c.heading);
+      out[k++] = Math.sin(rel);
+      out[k++] = Math.cos(rel);
+    } else {
+      out[k++] = 0; out[k++] = 0;
+    }
+  }
 }

@@ -2,8 +2,12 @@
 /** lab = generational (we score and pick parents); natural = creatures reproduce on their own. */
 export type SimMode = "lab" | "natural";
 
-/** random = food reappears anywhere; plants = sprouts near other plants, on fertile ground. */
-export type FoodModel = "random" | "plants";
+/**
+ * random = food items reappear anywhere; plants = items sprout near other plants on
+ * fertile ground; vegetation = continuous ground cover (biomass per cell) that grows,
+ * spreads, dies back in winter and is grazed.
+ */
+export type FoodModel = "random" | "plants" | "vegetation";
 
 export interface SimConfig {
   mode: SimMode;
@@ -103,6 +107,22 @@ export interface SimConfig {
   /** A new sprout starts at this fraction of full size. */
   seedling: number;
 
+  // Vegetation ground cover (foodModel "vegetation") and satiety (Phase 6c step 2c)
+  /** Vegetation cell size (px). */
+  vegCell: number;
+  /** Biomass a cell holds at full fertility in the most fertile biome. */
+  vegCapacity: number;
+  /** Logistic growth rate per tick. */
+  vegGrowth: number;
+  /** How strongly vegetated neighbours seed a cell (colonisation). */
+  vegColonise: number;
+  /** Long-distance seed rain (biomass units) so bare land can recover. */
+  vegSeedRain: number;
+  /** Most a creature can graze per tick (at rest; less while moving). */
+  vegBite: number;
+  /** A creature can only take in as much energy as it has room for; uneaten food stays. */
+  satiety: boolean;
+
   // Creature body
   maxEnergy: number;
   initialEnergy: number;
@@ -168,6 +188,13 @@ export interface SimConfig {
   sensorNoise: number;
   /** Proprioception: brains get their own speed as a 5th input. */
   senseSpeed: boolean;
+  /**
+   * Perceive food amount: how much the nearest plant holds, plus the direction and
+   * amount of the richest plant in range (4 inputs).
+   */
+  senseFoodAmount: boolean;
+  /** Sense crowding: how crowded it is nearby and which way the crowd is (3 inputs). */
+  senseCrowd: boolean;
 
   // Natural mode (Phase 5)
   /** Upkeep multiplier 1 + (age / agingScale)²: doubles at this age. 0 = no ageing. */
@@ -241,6 +268,17 @@ export const DEFAULT_CONFIG: SimConfig = {
   biteSize: 10,
   seedling: 0.25,
 
+  vegCell: 20,
+  vegCapacity: 30,
+  // Matched to the plant-token model's productivity (same world richness, more natural dynamics):
+  // peak logistic yield r·ΣK/4 ≈ sprout rate × meal size (e.g. 240 × 0.01 × 40 ≈ 96/tick in the
+  // big world) with mean cell capacity ≈ 30 × fertility 0.5 × biome 0.71 ≈ 10.6  →  r ≈ 0.0075.
+  vegGrowth: 0.0075,
+  vegColonise: 0.25,
+  vegSeedRain: 0.01,
+  vegBite: 6,
+  satiety: false,
+
   maxEnergy: 100,
   initialEnergy: 60,
   basalCost: 0.05,
@@ -279,6 +317,8 @@ export const DEFAULT_CONFIG: SimConfig = {
   acceleration: 0,
   sensorNoise: 0,
   senseSpeed: false,
+  senseFoodAmount: false,
+  senseCrowd: false,
 
   agingScale: 0,
   maturityAge: 150,
@@ -348,4 +388,10 @@ export const GEOGRAPHY_PRESET: Partial<SimConfig> = {
   mountainCost: 20,
   // Population brake: without it, boom-and-bust crashes caused 9-10 extinctions per 100k ticks.
   crowding: true,
+  // Sensing the crowd lets brains evolve dispersal: in 2 of 3 seeds, ~2x population,
+  // steadier numbers, 5-7 coexisting species, and 2x more creatures in tundra/desert.
+  senseCrowd: true,
+  // Natural food base: living ground cover, and no eating beyond a full stomach.
+  foodModel: "vegetation",
+  satiety: true,
 };

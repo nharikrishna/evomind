@@ -10,6 +10,7 @@ import { DEFAULT_CONFIG, type SimConfig } from "../sim/config";
 import { deriveSeed } from "../sim/rng";
 import { aliveCount, createWorld, isEpisodeOver, step, type World } from "../sim/world";
 import { decodeRepro } from "../sim/lifeHistory";
+import { preySensorLabels } from "../sim/sensors";
 import type { Genome } from "../brain/genome";
 import { NeuralController, neuralFactory } from "../brain/neuralController";
 import { randomPopulation } from "../brain/population";
@@ -282,6 +283,14 @@ function genomeOf(world: World, i: number): Genome | null {
   return ctrl instanceof NeuralController ? ctrl.genome : null;
 }
 
+function vegetationSnap(w: World): NonNullable<WorldSnap["vegetation"]> {
+  const veg = w.vegetation!;
+  const values = new Uint8Array(veg.biomass.length);
+  const k = 255 / w.config.vegCapacity;
+  for (let i = 0; i < values.length; i++) values[i] = Math.min(255, veg.biomass[i] * k);
+  return { cols: veg.cols, rows: veg.rows, cell: veg.cell, values };
+}
+
 function snapWorld(v: View, relativeOf: number | null): WorldSnap {
   const w = v.world;
   const lin = lineageSrc();
@@ -327,7 +336,8 @@ function snapWorld(v: View, relativeOf: number | null): WorldSnap {
     meanFood: n ? eaten / n : 0,
     creatures,
     food,
-    fertility: w.fertility ? { cols: w.fertility.cols, rows: w.fertility.rows, values: Array.from(w.fertility.values) } : null,
+    fertility: w.fertility && !w.vegetation ? { cols: w.fertility.cols, rows: w.fertility.rows, values: Array.from(w.fertility.values) } : null,
+    vegetation: w.vegetation ? vegetationSnap(w) : null,
     ...terrainFor(w),
   };
 }
@@ -394,6 +404,7 @@ function snapSelected(): { snap: SelectedSnap | null; relativeOf: number | null 
       lifeHistory: g?.genes.repro ? decodeRepro(g.genes.repro) : null,
       brain: brain && {
         shape: brain.shape,
+        labels: preySensorLabels(v.world.config),
         weights: new Float32Array(brain.weights),
         inputs: new Float32Array(brain.lastInputs),
         hidden: new Float32Array(brain.hiddenAct),
@@ -467,7 +478,7 @@ function sendFrame(): void {
       views: worldSnaps,
       selected: snap,
     },
-    worldSnaps.flatMap((s) => [s.creatures.buffer, s.food.buffer]),
+    worldSnaps.flatMap((s) => [s.creatures.buffer, s.food.buffer, ...(s.vegetation ? [s.vegetation.values.buffer] : [])]),
   );
 }
 

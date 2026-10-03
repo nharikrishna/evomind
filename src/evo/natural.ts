@@ -532,7 +532,10 @@ export class NaturalEvolution {
       alignment: aTicks ? aSum / aTicks : 0,
       ...traitStats(genomes, cfg),
       reproThresholdMean, reproThresholdSd, offspringShareMean, offspringShareSd,
-      foodOnMap: this.world.food.reduce((s, f) => s + (f.active ? 1 : 0), 0),
+      // Vegetation: standing biomass in "meals" (foodEnergy units); items: standing food count.
+      foodOnMap: this.world.vegetation
+        ? this.world.vegetation.total() / cfg.foodEnergy
+        : this.world.food.reduce((s, f) => s + (f.active ? 1 : 0), 0),
       foodClustering: (() => {
         const act = this.world.food.filter((f) => f.active);
         return clarkEvans(act.map((f) => f.x), act.map((f) => f.y), cfg.width, cfg.height);

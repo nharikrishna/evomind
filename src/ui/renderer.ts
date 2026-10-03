@@ -92,6 +92,8 @@ export class Renderer {
   private ground: { key: string; canvas: HTMLCanvasElement } | null = null;
 
   private lastSnap: WorldSnap | null = null;
+  /** Reused canvas for the vegetation layer (one pixel per cell). */
+  private vegCanvas: HTMLCanvasElement | null = null;
   private drag: { x: number; y: number; cx: number; cy: number; moved: boolean } | null = null;
 
   /** Called with the picked creature id (or null) on a click that wasn't a drag. */
@@ -292,6 +294,26 @@ export class Renderer {
     return canvas;
   }
 
+  private vegetationImage(v: NonNullable<WorldSnap["vegetation"]>): HTMLCanvasElement {
+    if (!this.vegCanvas || this.vegCanvas.width !== v.cols || this.vegCanvas.height !== v.rows) {
+      this.vegCanvas = document.createElement("canvas");
+      this.vegCanvas.width = v.cols;
+      this.vegCanvas.height = v.rows;
+    }
+    const g = this.vegCanvas.getContext("2d")!;
+    const img = g.createImageData(v.cols, v.rows);
+    for (let i = 0; i < v.values.length; i++) {
+      const t = v.values[i] / 255;
+      const o = i * 4;
+      img.data[o] = 30 + 20 * t;
+      img.data[o + 1] = 90 + 80 * t;
+      img.data[o + 2] = 45;
+      img.data[o + 3] = Math.round(150 * Math.sqrt(t)); // sqrt: sparse cover still visible
+    }
+    g.putImageData(img, 0, 0);
+    return this.vegCanvas;
+  }
+
   /** Remember terrain sent with a snapshot (it is only sent once per world). */
   rememberTerrain(t: Terrain | null): void {
     if (t && !terrainCache.has(t.mapId)) this.terrainImage(t);
@@ -329,6 +351,11 @@ export class Renderer {
     if (terrain) {
       ctx.imageSmoothingEnabled = false;
       ctx.drawImage(terrain.canvas, 0, 0, terrain.terrain.cols * terrain.terrain.cell, terrain.terrain.rows * terrain.terrain.cell);
+    }
+    // Vegetation: living ground cover, brighter green = more plant biomass.
+    if (snap.vegetation) {
+      ctx.imageSmoothingEnabled = true;
+      ctx.drawImage(this.vegetationImage(snap.vegetation), 0, 0, snap.vegetation.cols * snap.vegetation.cell, snap.vegetation.rows * snap.vegetation.cell);
     }
     // Fertile ground: a faint green tint, smooth because it's upscaled from a small image.
     if (snap.fertility) {

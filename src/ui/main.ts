@@ -177,7 +177,7 @@ const natCharts = [
   }),
   new LineChart($("c-foodmap"), {
     title: "Food on the map",
-    subtitle: "standing plants (eaten ones regrow)",
+    subtitle: "standing plant food, in meals (40 energy each)",
     series: [{ key: "foodOnMap", label: "Food", color: SERIES_1 }],
     format: (v) => v.toFixed(0),
   }),
@@ -400,7 +400,7 @@ function drawFrame(f: Extract<FromWorker, { t: "frame" }>): void {
       v.label.textContent = snap.label;
     }
     v.meta.textContent = snap.endless
-      ? `population ${snap.count} · food on map ${snap.food.length / 2}`
+      ? `population ${snap.count}` + (snap.vegetation ? "" : ` · food on map ${snap.food.length / 2}`)
       : `tick ${snap.tick}/${snap.episodeTicks} · alive ${snap.alive}/${snap.count} · avg food ${snap.meanFood.toFixed(1)}`;
     v.overlay.hidden = !(fast && k === 0);
     if (fast && k === 0) {
@@ -576,6 +576,8 @@ function applyMode(): void {
   $("nat-charts").hidden = !nat;
   $("life-section").hidden = !nat;
   $("biome-section").hidden = !(nat && config.biomes);
+  // Clustering of food items doesn't apply to continuous ground cover.
+  $("c-cluster").hidden = config.foodModel === "vegetation";
   $("eco-row").hidden = !nat;
   $("regions-panel").hidden = !config.biomes;
   $("eco-row").classList.toggle("single", !config.biomes);

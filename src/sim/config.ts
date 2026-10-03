@@ -122,6 +122,11 @@ export interface SimConfig {
   vegBite: number;
   /** A creature can only take in as much energy as it has room for; uneaten food stays. */
   satiety: boolean;
+  /**
+   * Intake scales with body size like metabolism does (Kleiber): bite ∝ mass^0.75 = size^1.5.
+   * Without it a tiny body eats as much as a big one at a fraction of the upkeep.
+   */
+  intakeScaling: boolean;
 
   // Creature body
   maxEnergy: number;
@@ -278,6 +283,7 @@ export const DEFAULT_CONFIG: SimConfig = {
   vegSeedRain: 0.01,
   vegBite: 6,
   satiety: false,
+  intakeScaling: false,
 
   maxEnergy: 100,
   initialEnergy: 60,
@@ -394,4 +400,6 @@ export const GEOGRAPHY_PRESET: Partial<SimConfig> = {
   // Natural food base: living ground cover, and no eating beyond a full stomach.
   foodModel: "vegetation",
   satiety: true,
+  // Bigger mouth and gut: intake ∝ metabolic size (bodies were collapsing to minimum size without it).
+  intakeScaling: true,
 };

@@ -315,9 +315,11 @@ export function step(world: World): void {
 
     // Eating. With satiety you can only take in what you have room for.
     const room = cfg.satiety ? Math.max(0, body.maxEnergy - c.energy) : Infinity;
+    // Intake scales with metabolic size (mass^0.75 = size^1.5): bigger mouth and gut.
+    const mouth = cfg.intakeScaling ? body.size ** 1.5 : 1;
     if (veg) {
       // Graze the cell you stand on; you can't graze well at a gallop.
-      const want = Math.min(room, cfg.vegBite * (1 - 0.8 * Math.min(1, c.speed / body.maxSpeed)));
+      const want = Math.min(room, cfg.vegBite * mouth * (1 - 0.8 * Math.min(1, c.speed / body.maxSpeed)));
       const take = want > 0 ? veg.graze(c.x, c.y, want) : 0;
       c.energy += take;
       c.foodEaten += take / cfg.foodEnergy;
@@ -329,7 +331,7 @@ export function step(world: World): void {
       const f = food[bite];
       if (cfg.plantBiomass) {
         // Graze: one bite per tick; the plant shrinks and dies only if eaten to nothing.
-        const take = Math.min(f.energy, cfg.biteSize, room);
+        const take = Math.min(f.energy, cfg.biteSize * mouth, room);
         c.energy = Math.min(body.maxEnergy, c.energy + take);
         c.foodEaten += take / cfg.foodEnergy;
         f.energy -= take;

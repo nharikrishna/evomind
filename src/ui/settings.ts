@@ -57,6 +57,7 @@ const SECTIONS: [string, Field[]][] = [
     { key: "respawnRate", label: "Food regrowth / tick", step: 0.005, min: 0, max: 1 },
     { key: "foodModel", label: "Food model", choices: [["vegetation", "Vegetation (ground cover)"], ["plants", "Plant items (patches)"], ["random", "Random scatter"]] },
     { key: "satiety", label: "Satiety (no eating when full)", bool: true },
+    { key: "intakeScaling", label: "Intake scales with size", bool: true },
     { key: "vegGrowth", label: "Vegetation growth rate", step: 0.0005, min: 0 },
     { key: "vegCapacity", label: "Vegetation per cell", step: 5, min: 1 },
     { key: "fertilityScale", label: "Fertile patch size (px)", step: 20, min: 40 },

@@ -12,8 +12,9 @@ import { genomeFromJSON, genomeToJSON } from "../analysis/history";
 import { mutate } from "./mutation";
 import { clarkEvans } from "../sim/food";
 import { seasonFactor, seasonInfo } from "../sim/seasons";
-import { BIOMES } from "../sim/biomes";
+import { BIOMES, NO_BARRIER, RIVER } from "../sim/biomes";
 import type { LineageEntry } from "./generation";
+import { genomeVector, geneticDistance, SpeciesTracker } from "./species";
 
 /**
  * Natural (open-ended) evolution. There is no fitness function and there are no
@@ -21,6 +22,39 @@ import type { LineageEntry } from "./generation";
  * mutated genome and part of the parent's energy, and everyone eventually dies
  * of starvation or old age. Whatever leaves descendants spreads.
  */
+
+/** One row of the regions table (latest sample only, not history). */
+export interface RegionSummary {
+  region: number;
+  biome: number;
+  population: number;
+  /** Species present, and the most common one with its share of the region. */
+  species: number;
+  dominantSpecies: number | null;
+  dominantShare: number;
+  size: number;
+  speed: number;
+  sensor: number;
+  insulation: number;
+  /** Biome base temperature (-1 very cold .. +1 very hot). */
+  temp: number;
+  /** Mean RMS genetic distance from this region's average genome to the other regions'. */
+  distance: number;
+  x: number;
+  y: number;
+}
+
+/** One row of the species list (latest sample only). */
+export interface SpeciesSummary {
+  id: number;
+  parent: number | null;
+  born: number;
+  extinct: number | null;
+  size: number;
+  peak: number;
+  /** Region holding most of its members (null if extinct / no biomes). */
+  mainRegion: number | null;
+}
 
 /** One stats sample, recorded every `sampleEvery` ticks. */
 export interface NaturalStats extends TraitStats {
@@ -52,11 +86,23 @@ export interface NaturalStats extends TraitStats {
   lean: number;
   /** Environment-shift food multiplier in effect. */
   foodBoost: number;
+  /**
+   * Genetic separation between regions (Fst-like): (between - within) / between
+   * mean genome distance. 0 = one mixed gene pool; higher = regions drifting apart.
+   */
+  geneticSeparation: number;
+  /** Storm-carried founder groups so far. */
+  founderEvents: number;
+  /** Species (genetic clusters) alive now. */
+  speciesAlive: number;
+  /** New species founded so far by divergence (not counting the starting founders). */
+  speciations: number;
   /** Per biome (index = BIOMES order): creatures there now and their mean traits (0 if empty). */
   biomePop: number[];
   biomeSize: number[];
   biomeSpeed: number[];
   biomeSensor: number[];
+  biomeInsulation: number[];
   extinctions: number;
 }
 
@@ -131,12 +177,24 @@ export class NaturalEvolution {
   private windowBirths = 0;
   private windowDeaths = 0;
   private windowDeathAge = 0;
+  founderEvents = 0;
+  /** Events the UI hasn't shown yet (e.g. storm founders). */
+  readonly pendingEvents: string[] = [];
+  readonly species: SpeciesTracker;
+  /** Latest regions table and species list (refreshed every sample). */
+  regions: RegionSummary[] = [];
+  speciesList: SpeciesSummary[] = [];
+  private speciesRng: Rng;
 
   constructor(readonly config: SimConfig, seedGenomes?: Genome[]) {
     this.rng = new Rng(deriveSeed(config.seed, 0x9a7));
     const pop = seedGenomes ?? randomPopulation(config, this.ids);
     for (const g of pop) this.lineage.set(g.id, { parentId: null, generation: g.generation, founder: g.id });
     this.world = createWorld({ ...config, creatureCount: pop.length }, neuralFactory(pop));
+    // Species bookkeeping has its own random stream, so it never changes the simulation.
+    this.speciesRng = new Rng(deriveSeed(config.seed, 0x5bec));
+    this.species = new SpeciesTracker(config.speciesThreshold);
+    for (const g of pop) this.species.assignFounder(g, 0);
   }
 
   get tick(): number {
@@ -194,16 +252,22 @@ export class NaturalEvolution {
       if (!g.genes.repro) continue;
       const { reproThreshold, offspringShare } = decodeRepro(g.genes.repro);
       if (c.energy < reproThreshold * c.body.maxEnergy) continue;
+      // Crowding: breeding is half as likely with `crowdTolerance` neighbours, a third with twice that.
+      if (cfg.crowding && c.crowding > 0 && this.rng.next() > 1 / (1 + c.crowding / cfg.crowdTolerance)) continue;
       this.giveBirth(i, g, offspringShare);
     }
 
     if (this.world.creatures.length === 0) this.reseed();
+    if (cfg.barriers && this.world.biomeMap && this.rng.next() < cfg.founderRate) this.stormFounders();
 
     const t = this.world.tick;
     if (t % cfg.sampleEvery === 0) this.recordStats();
     if (cfg.labTestEvery > 0 && t % cfg.labTestEvery === 0) this.startLabTest();
     this.advanceLabTests(LAB_TICKS_PER_TICK);
-    if (t % PRUNE_EVERY === 0) this.pruneLineage();
+    if (t % PRUNE_EVERY === 0) {
+      this.pruneLineage();
+      this.species.prune(50_000, t);
+    }
   }
 
   /**
@@ -249,6 +313,7 @@ export class NaturalEvolution {
     const pos = this.birthPosition(parent.x, parent.y);
     const child = newCreature(this.world, pos.x, pos.y, this.rng.range(-Math.PI, Math.PI));
     attachGenome(child, cg, cfg);
+    this.species.assignChild(cg, pg.id, this.world.tick);
     child.energy = give * cfg.birthEfficiency;
     addCreature(this.world, child, new NeuralController(cg));
 
@@ -262,18 +327,149 @@ export class NaturalEvolution {
 
   /**
    * Children appear right next to the parent, and on the parent's side of any
-   * biome barrier (otherwise births would leak across walls).
+   * barrier (otherwise births would leak across rivers and walls).
    */
   private birthPosition(px: number, py: number): { x: number; y: number } {
     const cfg = this.config;
     const map = this.world.biomeMap;
-    const home = map ? map.at(px, py) : -1;
+    const walls = map && !cfg.barriers && cfg.biomeCrossing < 1;
+    const geo = map && cfg.barriers;
     for (let t = 0; t < 4; t++) {
       const x = wrapCoord(px + this.rng.gaussian() * 6, cfg.width);
       const y = wrapCoord(py + this.rng.gaussian() * 6, cfg.height);
-      if (!map || cfg.biomeCrossing >= 1 || map.at(x, y) === home) return { x, y };
+      if (walls && map!.at(x, y) !== map!.at(px, py)) continue;
+      if (geo && (map!.regionAt(x, y) !== map!.regionAt(px, py) || map!.barrierAt(x, y) === RIVER)) continue;
+      return { x, y };
     }
     return { x: px, y: py };
+  }
+
+  /**
+   * A storm carries a small group of neighbours to a random other region, like
+   * animals rafting to an island. The main way genes cross barriers in bulk.
+   */
+  private stormFounders(): void {
+    const cfg = this.config;
+    const map = this.world.biomeMap!;
+    const cs = this.world.creatures;
+    if (cs.length < cfg.founderGroup * 2) return;
+    const seed = cs[this.rng.int(cs.length)];
+    const from = map.regionAt(seed.x, seed.y);
+    const others = map.regions.map((_, k) => k).filter((k) => k !== from);
+    const to = others[this.rng.int(others.length)];
+    const target = map.randomPointIn(to, this.rng);
+    if (!target) return;
+    const group = cs
+      .filter((c) => map.regionAt(c.x, c.y) === from)
+      .map((c) => ({ c, d: (c.x - seed.x) ** 2 + (c.y - seed.y) ** 2 }))
+      .sort((a, b) => a.d - b.d)
+      .slice(0, cfg.founderGroup);
+    for (const { c } of group) {
+      for (let t = 0; t < 6; t++) {
+        const x = wrapCoord(target.x + this.rng.gaussian() * 15, cfg.width);
+        const y = wrapCoord(target.y + this.rng.gaussian() * 15, cfg.height);
+        if (map.regionAt(x, y) === to && map.barrierAt(x, y) === NO_BARRIER) {
+          c.x = x;
+          c.y = y;
+          break;
+        }
+      }
+    }
+    this.founderEvents++;
+    const name = (k: number) => BIOMES[map.regions[k].biome].name.toLowerCase();
+    this.pendingEvents.push(`A storm carried ${group.length} creatures from a ${name(from)} region to a ${name(to)} region.`);
+  }
+
+  /** Species of a living genome (undefined if unknown). */
+  speciesOf(genomeId: number): number | undefined {
+    return this.species.speciesOf(genomeId);
+  }
+
+  private regionSummaries(genomes: Genome[]): RegionSummary[] {
+    const map = this.world.biomeMap;
+    if (!map) return [];
+    const k = map.regions.length;
+    const members: number[][] = Array.from({ length: k }, () => []);
+    this.world.creatures.forEach((c, i) => members[map.regionAt(c.x, c.y)].push(i));
+    // Average genome per region, for between-region distances.
+    const centroid = members.map((idx) => {
+      if (!idx.length) return null;
+      const vs = idx.map((i) => genomeVector(genomes[i]));
+      const out = new Float32Array(vs[0].length);
+      for (const v of vs) for (let j = 0; j < out.length; j++) out[j] += v[j] / vs.length;
+      return out;
+    });
+    return map.regions.map((r, region) => {
+      const idx = members[region];
+      const cs = idx.map((i) => this.world.creatures[i]);
+      const counts = new Map<number, number>();
+      for (const i of idx) {
+        const sp = this.species.speciesOf(genomes[i].id);
+        if (sp !== undefined) counts.set(sp, (counts.get(sp) ?? 0) + 1);
+      }
+      let dominant: number | null = null, top = 0;
+      for (const [sp, n] of counts) if (n > top) { top = n; dominant = sp; }
+      const mean = (f: (c: (typeof cs)[0]) => number) => (cs.length ? cs.reduce((s, c) => s + f(c), 0) / cs.length : 0);
+      const others = centroid.filter((v, j) => v && j !== region) as Float32Array[];
+      const me = centroid[region];
+      return {
+        region, biome: r.biome, population: cs.length,
+        species: counts.size, dominantSpecies: dominant, dominantShare: cs.length ? top / cs.length : 0,
+        size: mean((c) => c.body.size), speed: mean((c) => c.body.maxSpeed), sensor: mean((c) => c.body.sensorRange),
+        insulation: mean((c) => c.body.insulation), temp: BIOMES[r.biome].temp,
+        distance: me && others.length ? others.reduce((s, v) => s + geneticDistance(me, v), 0) / others.length : 0,
+        x: r.x, y: r.y,
+      };
+    });
+  }
+
+  private speciesSummaries(genomes: Genome[]): SpeciesSummary[] {
+    const map = this.world.biomeMap;
+    const regionCount = new Map<number, Map<number, number>>();
+    if (map) {
+      this.world.creatures.forEach((c, i) => {
+        const sp = this.species.speciesOf(genomes[i].id);
+        if (sp === undefined) return;
+        if (!regionCount.has(sp)) regionCount.set(sp, new Map());
+        const m = regionCount.get(sp)!;
+        const r = map.regionAt(c.x, c.y);
+        m.set(r, (m.get(r) ?? 0) + 1);
+      });
+    }
+    return [...this.species.species.values()].map((s) => {
+      let mainRegion: number | null = null, top = 0;
+      for (const [r, n] of regionCount.get(s.id) ?? []) if (n > top) { top = n; mainRegion = r; }
+      return { id: s.id, parent: s.parent, born: s.born, extinct: s.extinct, size: s.size, peak: s.peak, mainRegion };
+    });
+  }
+
+  /** Fst-like separation of the gene pools of different regions (sampled). */
+  private geneticSeparation(): number {
+    const map = this.world.biomeMap;
+    if (!map) return 0;
+    const byRegion = new Map<number, Genome[]>();
+    this.world.creatures.forEach((c, i) => {
+      const r = map.regionAt(c.x, c.y);
+      if (!byRegion.has(r)) byRegion.set(r, []);
+      byRegion.get(r)!.push(this.genomeAt(i));
+    });
+    const groups = [...byRegion.values()].filter((g) => g.length >= 3).map((g) => spread(g, 20));
+    if (groups.length < 2) return 0;
+    const vec = (g: Genome) => [...g.genes.brain, ...(g.genes.body ?? []), ...(g.genes.repro ?? [])];
+    const vecs = groups.map((g) => g.map(vec));
+    const dist = (a: number[], b: number[]) => Math.sqrt(a.reduce((s, x, k) => s + (x - b[k]) ** 2, 0));
+    let within = 0, nw = 0, between = 0, nb = 0;
+    for (let i = 0; i < vecs.length; i++) {
+      for (let a = 0; a < vecs[i].length; a++) {
+        for (let b = a + 1; b < vecs[i].length; b++) { within += dist(vecs[i][a], vecs[i][b]); nw++; }
+        for (let j = i + 1; j < vecs.length; j++) {
+          for (const v of vecs[j]) { between += dist(vecs[i][a], v); nb++; }
+        }
+      }
+    }
+    if (!nw || !nb) return 0;
+    const wm = within / nw, bm = between / nb;
+    return bm > 0 ? Math.max(0, (bm - wm) / bm) : 0;
   }
 
   /** Everyone died: restart the population from recent successful parents (or randoms). */
@@ -287,6 +483,8 @@ export class NaturalEvolution {
       else this.lineage.set(g.id, { parentId: g.parentId, generation: g.generation, founder: this.founderOf(g.parentId!) });
       const c = newCreature(this.world, this.rng.range(0, cfg.width), this.rng.range(0, cfg.height), this.rng.range(-Math.PI, Math.PI));
       attachGenome(c, g, cfg);
+      if (randoms) this.species.assignFounder(g, this.world.tick);
+      else this.species.assignChild(g, g.parentId!, this.world.tick);
       addCreature(this.world, c, new NeuralController(g));
     }
   }
@@ -295,6 +493,9 @@ export class NaturalEvolution {
     const cfg = this.config;
     const cs = this.world.creatures;
     const genomes = this.livingGenomes();
+    this.species.census(genomes, this.world.tick, this.speciesRng);
+    this.regions = this.regionSummaries(genomes);
+    this.speciesList = this.speciesSummaries(genomes);
     let age = 0, energy = 0, gen = 0, maxGen = 0, aSum = 0, aTicks = 0;
     const families = new Set<number>();
     const thr: number[] = [], share: number[] = [];
@@ -340,6 +541,10 @@ export class NaturalEvolution {
       lean: seasonInfo(cfg, this.world.tick)?.lean ? 1 : 0,
       foodBoost: this.world.foodBoost,
       ...this.biomeStats(),
+      geneticSeparation: this.geneticSeparation(),
+      founderEvents: this.founderEvents,
+      speciesAlive: this.species.livingSpecies().length,
+      speciations: this.species.speciations,
       extinctions: this.extinctions,
     });
     this.windowBirths = 0;
@@ -347,19 +552,24 @@ export class NaturalEvolution {
     this.windowDeathAge = 0;
   }
 
-  private biomeStats(): Pick<NaturalStats, "biomePop" | "biomeSize" | "biomeSpeed" | "biomeSensor"> {
+  private biomeStats(): Pick<NaturalStats, "biomePop" | "biomeSize" | "biomeSpeed" | "biomeSensor" | "biomeInsulation"> {
     const k = BIOMES.length;
     const pop = new Array<number>(k).fill(0), size = new Array<number>(k).fill(0);
     const speed = new Array<number>(k).fill(0), sensor = new Array<number>(k).fill(0);
+    const insul = new Array<number>(k).fill(0);
     for (const c of this.world.creatures) {
       if (c.biome < 0) continue;
       pop[c.biome]++;
       size[c.biome] += c.body.size;
       speed[c.biome] += c.body.maxSpeed;
       sensor[c.biome] += c.body.sensorRange;
+      insul[c.biome] += c.body.insulation;
     }
     const mean = (a: number[]) => a.map((v, b) => (pop[b] ? v / pop[b] : 0));
-    return { biomePop: pop, biomeSize: mean(size), biomeSpeed: mean(speed), biomeSensor: mean(sensor) };
+    return {
+      biomePop: pop, biomeSize: mean(size), biomeSpeed: mean(speed),
+      biomeSensor: mean(sensor), biomeInsulation: mean(insul),
+    };
   }
 
   /**
@@ -368,11 +578,11 @@ export class NaturalEvolution {
    * whose own food settings differ.
    */
   private labConfig(): SimConfig {
-    const { foodCount, foodEnergy, respawnRate, episodeTicks, foodModel } = DEFAULT_CONFIG;
+    const { foodCount, foodEnergy, respawnRate, episodeTicks, foodModel, width, height } = DEFAULT_CONFIG;
     return {
       ...this.config, mode: "lab", creatureCount: LAB_TEST_SIZE,
-      foodCount, foodEnergy, respawnRate, episodeTicks, foodModel,
-      agingScale: 0, seasonLength: 0, biomes: false,
+      foodCount, foodEnergy, respawnRate, episodeTicks, foodModel, width, height,
+      agingScale: 0, seasonLength: 0, biomes: false, barriers: false,
     };
   }
 

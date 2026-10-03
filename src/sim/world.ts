@@ -5,10 +5,10 @@ import { Rng } from "./rng";
 import { TorusGrid } from "./spatial";
 import { preySensorCount, sensePrey } from "./sensors";
 import { clamp, wrapAngle, wrapCoord } from "./math";
-import { defaultBody } from "./body";
+import { defaultBody, type Body } from "./body";
 import { FertilityMap, sproutPosition } from "./food";
 import { seasonFactor } from "./seasons";
-import { BiomeMap, BIOMES, GRASSLAND } from "./biomes";
+import { BiomeMap, BIOMES, GRASSLAND, MOUNTAIN, RIVER } from "./biomes";
 
 /**
  * The world. Arrays are parallel: creatures[i] is driven by controllers[i] and
@@ -36,6 +36,8 @@ export interface World {
   foodBoost: number;
   /** Biome regions (null = uniform world). */
   biomeMap: BiomeMap | null;
+  /** Crowding only: creature positions, rebuilt every tick for neighbour counts. */
+  creatureGrid: TorusGrid | null;
   readonly enforceNeuralPrey: boolean;
 }
 
@@ -70,6 +72,9 @@ export function newCreature(world: World, x: number, y: number, heading: number)
     body: defaultBody(world.config),
     children: 0,
     biome: -1,
+    region: -1,
+    thermalSpent: 0,
+    crowding: 0,
     distanceTraveled: 0,
     energySpent: 0,
     alignmentSum: 0,
@@ -129,7 +134,8 @@ export function createWorld(
   for (let i = 0; i < config.foodCount; i++) {
     // Plants seed the initial meadow from each other, so it starts out patchy.
     const pos = fertility ? sproutPosition(config, fertility, placed, rng, biomeMap) : { x: rng.range(0, config.width), y: rng.range(0, config.height) };
-    const f: Food = { id: i, x: pos.x, y: pos.y, energy: config.foodEnergy, active: true };
+    const growth = fertility ? localGrowth(fertility, biomeMap, pos.x, pos.y) : 1;
+    const f: Food = { id: i, x: pos.x, y: pos.y, energy: config.foodEnergy, active: true, growth };
     if (fertility) placed.push(f.x, f.y);
     food.push(f);
     foodGrid.insert(i, f.x, f.y);
@@ -149,6 +155,7 @@ export function createWorld(
     fertility,
     foodBoost: 1,
     biomeMap,
+    creatureGrid: config.crowding ? new TorusGrid(config.width, config.height, 50) : null,
     enforceNeuralPrey,
   };
 
@@ -157,6 +164,36 @@ export function createWorld(
     addCreature(world, c, makeController(c, i, rng, config));
   }
   return world;
+}
+
+/** How well plants grow at a spot: fertility × biome growth. */
+function localGrowth(fertility: FertilityMap, biomes: BiomeMap | null, x: number, y: number): number {
+  return fertility.at(x, y) * (biomes ? BIOMES[biomes.at(x, y)].growth : 1);
+}
+
+/** Biome temperature right now: its base plus the seasonal swing (summer warmer, winter colder). */
+export function ambientTemp(cfg: SimConfig, tick: number, base: number): number {
+  return cfg.seasonLength > 0 ? base + cfg.seasonTempSwing * Math.sin((2 * Math.PI * tick) / cfg.seasonLength) : base;
+}
+
+/**
+ * Energy spent keeping body temperature comfortable this tick.
+ * - Cold: heat leaks out through the surface (∝ size, while the energy store ∝ size², so
+ *   small bodies suffer more per unit of reserve); insulation blocks most of the leak.
+ * - Heat: metabolic heat (∝ mass^0.75 = size^1.5) can't be shed; insulation traps it and
+ *   movement makes more. Big, furry, fast bodies overheat.
+ */
+export function thermalCost(cfg: SimConfig, tick: number, biomeTemp: number, body: Body, speed: number): number {
+  const t = ambientTemp(cfg, tick, biomeTemp);
+  // Only the part outside the thermoneutral zone costs anything.
+  const cold = Math.max(0, -t - cfg.thermalComfort);
+  const hot = Math.max(0, t - cfg.thermalComfort);
+  if (cold > 0) return cfg.thermalCost * body.size * cold * (1 - 0.85 * body.insulation);
+  if (hot > 0) {
+    const activity = 1 + (speed / cfg.maxSpeed) ** 2;
+    return cfg.thermalCost * body.size ** 1.5 * hot * (1 + 2 * body.insulation) * activity;
+  }
+  return 0;
 }
 
 const action: Action = { turn: 0, thrust: 0 };
@@ -170,6 +207,13 @@ export function step(world: World): void {
   const cfg = world.config;
   const { creatures, controllers, food, foodGrid, sensorViews } = world;
 
+  // Crowding: index where everyone is this tick, for neighbour counts.
+  const crowd = world.creatureGrid;
+  if (crowd) {
+    crowd.clear();
+    for (let i = 0; i < creatures.length; i++) if (creatures[i].alive) crowd.insert(i, creatures[i].x, creatures[i].y);
+  }
+
   for (let i = 0; i < creatures.length; i++) {
     const c = creatures[i];
     if (!c.alive) continue;
@@ -179,6 +223,8 @@ export function step(world: World): void {
     const biomeIdx = world.biomeMap ? world.biomeMap.at(c.x, c.y) : -1;
     const biome = biomeIdx >= 0 ? BIOMES[biomeIdx] : null;
     c.biome = biomeIdx;
+    c.region = world.biomeMap ? world.biomeMap.regionAt(c.x, c.y) : -1;
+    const terrain = world.biomeMap && cfg.barriers ? world.biomeMap.barrierAt(c.x, c.y) : 0;
     const range = biome?.fog ? body.sensorRange * cfg.fogFactor : body.sensorRange;
     const near = foodGrid.nearest(c.x, c.y, range);
     world.nearestFood[i] = near;
@@ -205,8 +251,11 @@ export function step(world: World): void {
     c.speed = body.accel === Infinity ? target : c.speed + clamp(target - c.speed, -body.accel, body.accel);
     const nx = wrapCoord(c.x + Math.cos(c.heading) * c.speed, cfg.width);
     const ny = wrapCoord(c.y + Math.sin(c.heading) * c.speed, cfg.height);
-    // Barrier between biomes: a failed crossing stops the creature and turns it back.
-    if (world.biomeMap && cfg.biomeCrossing < 1 && world.biomeMap.at(nx, ny) !== biomeIdx && world.rng.next() >= cfg.biomeCrossing) {
+    // Rivers: stepping in usually fails (turn back); once in, you can wade across.
+    const intoRiver = terrain !== RIVER && world.biomeMap !== null && cfg.barriers && world.biomeMap.barrierAt(nx, ny) === RIVER;
+    // Old-style biome walls (no geography): a failed crossing stops and turns the creature.
+    const wall = world.biomeMap && !cfg.barriers && cfg.biomeCrossing < 1 && world.biomeMap.at(nx, ny) !== biomeIdx;
+    if ((intoRiver && world.rng.next() >= cfg.riverCrossing) || (wall && world.rng.next() >= cfg.biomeCrossing)) {
       c.heading = wrapAngle(c.heading + Math.PI);
       c.speed = 0;
     } else {
@@ -216,10 +265,13 @@ export function step(world: World): void {
 
     // Metabolism. Ageing: upkeep grows with age (doubles at age = agingScale).
     const aging = cfg.agingScale > 0 ? 1 + (c.age / cfg.agingScale) ** 2 : 1;
-    // Biomes: cold costs heat through the body surface (∝ size); mud makes moving dearer.
-    const cold = biome?.cold ? cfg.coldCost * body.size : 0;
-    const mud = biome?.mud ? cfg.mudFactor : 1;
-    const cost = body.basal * aging + cold + cfg.moveCost * body.moveFactor * c.speed * c.speed * mud;
+    const mud = (biome?.mud ? cfg.mudFactor : 1) * (terrain === MOUNTAIN ? cfg.mountainCost : 1);
+    const thermal = biome && cfg.temperature ? thermalCost(cfg, world.tick, biome.temp, body, c.speed) : 0;
+    // Crowding stress: each neighbour beyond the tolerance costs a little extra upkeep.
+    c.crowding = crowd ? crowd.countWithin(c.x, c.y, cfg.crowdRadius, i) : 0;
+    const stress = crowd ? cfg.crowdStress * Math.max(0, c.crowding - cfg.crowdTolerance) : 0;
+    const cost = body.basal * aging + thermal + stress + cfg.moveCost * body.moveFactor * c.speed * c.speed * mud;
+    c.thermalSpent += thermal;
     c.energy -= cost;
 
     // Recorded-only stats (true cos of bearing to food, pre-move)
@@ -235,10 +287,22 @@ export function step(world: World): void {
     const bite = foodGrid.nearest(c.x, c.y, body.eatRadius);
     if (bite >= 0) {
       const f = food[bite];
-      c.energy = Math.min(body.maxEnergy, c.energy + f.energy);
-      c.foodEaten++;
-      f.active = false;
-      foodGrid.remove(bite);
+      if (cfg.plantBiomass) {
+        // Graze: one bite per tick; the plant shrinks and dies only if eaten to nothing.
+        const take = Math.min(f.energy, cfg.biteSize);
+        c.energy = Math.min(body.maxEnergy, c.energy + take);
+        c.foodEaten += take / cfg.foodEnergy;
+        f.energy -= take;
+        if (f.energy < 0.5) {
+          f.active = false;
+          foodGrid.remove(bite);
+        }
+      } else {
+        c.energy = Math.min(body.maxEnergy, c.energy + f.energy);
+        c.foodEaten++;
+        f.active = false;
+        foodGrid.remove(bite);
+      }
     }
 
     c.age++;
@@ -249,8 +313,15 @@ export function step(world: World): void {
     }
   }
 
-  // Food regrowth (scaled by season and any environment shift)
-  const regrow = Math.min(1, cfg.respawnRate * seasonFactor(cfg, world.tick) * world.foodBoost);
+  // Standing plants regrow logistically from what's left (slow when tiny, fastest at half size).
+  const season = seasonFactor(cfg, world.tick);
+  if (cfg.plantBiomass) {
+    const k = cfg.foodEnergy, r = cfg.plantGrowth * season * world.foodBoost;
+    for (const f of food) if (f.active) f.energy = Math.min(k, f.energy + r * f.growth * f.energy * (1 - f.energy / k));
+  }
+
+  // New sprouts in empty slots (scaled by season and any environment shift)
+  const regrow = Math.min(1, cfg.respawnRate * season * world.foodBoost);
   let parents: number[] | null = null;
   for (let i = 0; i < food.length; i++) {
     const f = food[i];
@@ -264,10 +335,12 @@ export function step(world: World): void {
       const pos = sproutPosition(cfg, world.fertility, parents, world.rng, world.biomeMap);
       f.x = pos.x;
       f.y = pos.y;
+      f.growth = localGrowth(world.fertility, world.biomeMap, f.x, f.y);
     } else {
       f.x = world.rng.range(0, cfg.width);
       f.y = world.rng.range(0, cfg.height);
     }
+    f.energy = cfg.plantBiomass ? cfg.foodEnergy * cfg.seedling : cfg.foodEnergy;
     f.active = true;
     foodGrid.insert(i, f.x, f.y);
   }

@@ -1,7 +1,7 @@
 import type { SimConfig } from "./config";
 import { deriveSeed, Rng } from "./rng";
 import { wrapCoord } from "./math";
-import { BIOMES, MAX_GROWTH, type BiomeMap } from "./biomes";
+import { BIOMES, MAX_GROWTH, NO_BARRIER, type BiomeMap } from "./biomes";
 
 /**
  * Fertility: a smooth, seed-determined map of how readily plants grow, from
@@ -71,6 +71,8 @@ export function sproutPosition(
       x = rng.range(0, cfg.width);
       y = rng.range(0, cfg.height);
     }
+    // Nothing grows in rivers or on ridges.
+    if (biomes && cfg.barriers && biomes.barrierAt(x, y) !== NO_BARRIER) continue;
     const growth = biomes ? BIOMES[biomes.at(x, y)].growth / MAX_GROWTH : 1;
     if (rng.next() < fertility.at(x, y) * growth) break;
   }

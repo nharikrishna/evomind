@@ -54,11 +54,12 @@ export interface TraitStats {
   sensorRangeMean: number; sensorRangeSd: number;
   sizeMean: number; sizeSd: number;
   turnRateMean: number; turnRateSd: number;
+  insulationMean: number; insulationSd: number;
 }
 
 export function traitStats(genomes: readonly Genome[], cfg: SimConfig): TraitStats {
   const bodies = genomes.map((g) => (g.genes.body ? bodyFromGenes(g.genes.body, cfg) : defaultBody(cfg)));
-  const ms = (key: "maxSpeed" | "sensorRange" | "size" | "turnRate") => {
+  const ms = (key: "maxSpeed" | "sensorRange" | "size" | "turnRate" | "insulation") => {
     const v = bodies.map((b) => b[key]);
     const mean = v.reduce((s, x) => s + x, 0) / v.length;
     const sd = Math.sqrt(v.reduce((s, x) => s + (x - mean) ** 2, 0) / v.length);
@@ -68,7 +69,11 @@ export function traitStats(genomes: readonly Genome[], cfg: SimConfig): TraitSta
   const [sensorRangeMean, sensorRangeSd] = ms("sensorRange");
   const [sizeMean, sizeSd] = ms("size");
   const [turnRateMean, turnRateSd] = ms("turnRate");
-  return { maxSpeedMean, maxSpeedSd, sensorRangeMean, sensorRangeSd, sizeMean, sizeSd, turnRateMean, turnRateSd };
+  const [insulationMean, insulationSd] = ms("insulation");
+  return {
+    maxSpeedMean, maxSpeedSd, sensorRangeMean, sensorRangeSd, sizeMean, sizeSd,
+    turnRateMean, turnRateSd, insulationMean, insulationSd,
+  };
 }
 
 /** Average a list of metric records field by field. */

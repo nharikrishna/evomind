@@ -27,7 +27,29 @@ const SECTIONS: [string, Field[]][] = [
     { key: "birthEfficiency", label: "Birth efficiency", step: 0.05, min: 0.05, max: 1 },
     { key: "maxPopulation", label: "Population cap", step: 50, min: 10, max: 2000, int: true },
   ]],
+  ["Biomes & geography", [
+    { key: "biomes", label: "Biomes", bool: true },
+    { key: "biomeRegions", label: "Regions", step: 1, min: 4, max: 20, int: true },
+    { key: "biomeSense", label: "Sense own biome", bool: true },
+    { key: "barriers", label: "Rivers & mountains", bool: true },
+    { key: "riverCrossing", label: "River crossing chance", step: 0.01, min: 0, max: 1 },
+    { key: "mountainCost", label: "Mountain move cost ×", step: 1, min: 1 },
+    { key: "founderRate", label: "Storm founders / tick", step: 0.00005, min: 0, max: 0.01 },
+    { key: "temperature", label: "Temperature (heat budget)", bool: true },
+    { key: "thermalCost", label: "Thermal cost", step: 0.01, min: 0 },
+    { key: "costInsulation", label: "Insulation upkeep", step: 0.005, min: 0 },
+    { key: "seasonTempSwing", label: "Seasonal temperature swing", step: 0.1, min: 0, max: 2 },
+    { key: "thermalComfort", label: "Comfort zone (±)", step: 0.05, min: 0, max: 1 },
+    { key: "crowding", label: "Crowding (density brake)", bool: true },
+    { key: "crowdTolerance", label: "Crowd tolerance", step: 1, min: 1, int: true },
+    { key: "crowdStress", label: "Crowd stress / neighbour", step: 0.001, min: 0 },
+    { key: "plantBiomass", label: "Plant biomass (experimental)", bool: true },
+    { key: "mudFactor", label: "Swamp mud ×", step: 0.1, min: 1 },
+    { key: "fogFactor", label: "Forest sight ×", step: 0.05, min: 0.05, max: 1 },
+  ]],
   ["World", [
+    { key: "width", label: "World width", step: 100, min: 400, max: 4000, int: true },
+    { key: "height", label: "World height", step: 100, min: 300, max: 3000, int: true },
     { key: "seed", label: "Seed", step: 1, min: 0, int: true },
     { key: "creatureCount", label: "Population", step: 10, min: 2, max: 1000, int: true },
     { key: "foodCount", label: "Food items", step: 5, min: 0, max: 2000, int: true },
@@ -112,15 +134,28 @@ export class SettingsForm {
           input.type = "checkbox";
           input.className = "check";
         } else {
+          // Only `step` (what the arrow keys add). No min/max attributes and no
+          // browser validation: the browser's step check rejects perfectly good
+          // values (e.g. 100 with min 2 / step 10, or 0.6 with step 0.1 due to
+          // floating point). Ranges are checked in validate() instead.
           input.type = "number";
           input.step = String(f.step ?? 1);
-          if (f.min !== undefined) input.min = String(f.min);
-          if (f.max !== undefined) input.max = String(f.max);
+          input.inputMode = "decimal";
+          const range = f.min !== undefined && f.max !== undefined ? `${f.min} to ${f.max}`
+            : f.min !== undefined ? `at least ${f.min}` : f.max !== undefined ? `at most ${f.max}` : "";
+          if (range) input.title = `Allowed: ${range}`;
+          input.addEventListener("input", () => input.classList.remove("invalid"));
         }
         form.append(label, input);
         this.inputs.set(f.key, input);
       }
     }
+    form.noValidate = true;
+    this.errorEl = document.createElement("p");
+    this.errorEl.className = "form-error";
+    this.errorEl.hidden = true;
+    form.append(this.errorEl);
+
     const actions = document.createElement("div");
     actions.className = "actions";
     const apply = document.createElement("button");
@@ -139,9 +174,37 @@ export class SettingsForm {
     });
     form.addEventListener("submit", (e) => {
       e.preventDefault();
-      if (!form.reportValidity()) return;
+      if (!this.validate()) return;
       this.onApply(this.read());
     });
+  }
+
+  private errorEl: HTMLParagraphElement;
+
+  /** Check every number field is a finite value within its range; show what's wrong. */
+  private validate(): boolean {
+    const problems: string[] = [];
+    let first: HTMLInputElement | null = null;
+    for (const [, fields] of SECTIONS) {
+      for (const f of fields) {
+        if (f.bool || f.choices) continue;
+        const input = this.inputs.get(f.key) as HTMLInputElement;
+        const v = Number(input.value);
+        let msg: string | null = null;
+        if (input.value.trim() === "" || !Number.isFinite(v)) msg = "needs a number";
+        else if (f.min !== undefined && v < f.min) msg = `must be at least ${f.min}`;
+        else if (f.max !== undefined && v > f.max) msg = `must be at most ${f.max}`;
+        input.classList.toggle("invalid", msg !== null);
+        if (msg) {
+          problems.push(`${f.label} ${msg}`);
+          first ??= input;
+        }
+      }
+    }
+    this.errorEl.hidden = problems.length === 0;
+    this.errorEl.textContent = problems.length ? `Please fix: ${problems.join("; ")}.` : "";
+    first?.focus();
+    return problems.length === 0;
   }
 
   private base: SimConfig = DEFAULT_CONFIG;
@@ -149,7 +212,9 @@ export class SettingsForm {
   /** Show a config's values in the form (e.g. after loading a run). */
   load(cfg: SimConfig): void {
     this.base = cfg;
+    this.errorEl.hidden = true;
     for (const [key, input] of this.inputs) {
+      input.classList.remove("invalid");
       if (input instanceof HTMLInputElement && input.type === "checkbox") input.checked = Boolean(cfg[key]);
       else input.value = String(cfg[key]);
     }

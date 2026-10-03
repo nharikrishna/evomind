@@ -15,6 +15,8 @@ export function renderInspector(host: HTMLElement, s: SelectedSnap | null): void
   }
   const rows: [string, string][] = [
     ["Status", s.alive ? "alive" : "dead"],
+    ...(s.place ? ([["Location", s.place]] as [string, string][]) : []),
+    ...(s.species !== null ? ([["Species", `S${s.species}`]] as [string, string][]) : []),
     ["Energy", `${s.energy.toFixed(1)} / ${s.body.maxEnergy.toFixed(0)}`],
     ["Speed", s.speed.toFixed(2)],
     ["Food eaten", String(s.foodEaten)],
@@ -22,6 +24,8 @@ export function renderInspector(host: HTMLElement, s: SelectedSnap | null): void
     ...(s.lifeHistory ? ([["Children", String(s.children)]] as [string, string][]) : []),
     ["Distance", s.distanceTraveled.toFixed(0)],
     ["Energy spent", s.energySpent.toFixed(1)],
+    ...(s.thermalSpent > 0 ? ([["  on warmth/cooling", s.thermalSpent.toFixed(1)]] as [string, string][]) : []),
+    ...(s.crowding > 0 ? ([["Neighbours", String(s.crowding)]] as [string, string][]) : []),
     ["Alignment", s.alignment === null ? "–" : s.alignment.toFixed(2)],
     ["Genome", s.genome ? `#${s.genome.id}` : "–"],
     ["Born in", s.genome ? `generation ${s.genome.generation}` : "–"],
@@ -39,6 +43,7 @@ export function renderInspector(host: HTMLElement, s: SelectedSnap | null): void
     ["Sensor range", `${b.sensorRange.toFixed(0)} px`],
     ["Size", `${b.size.toFixed(2)}×`],
     ["Turn rate", `${((b.turnRate * 180) / Math.PI).toFixed(1)}°/tick`],
+    ["Insulation", b.insulation.toFixed(2)],
     ["Upkeep", `${b.basal.toFixed(3)} /tick`],
   ];
   for (const [k, v] of brows) bdl.append(el("dt", undefined, k), el("dd", undefined, v));

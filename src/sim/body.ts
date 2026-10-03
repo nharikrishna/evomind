@@ -14,13 +14,15 @@ export interface TraitSpec {
   unit: string;
 }
 
-export type TraitKey = "maxSpeed" | "sensorRange" | "size" | "turnRate";
+export type TraitKey = "maxSpeed" | "sensorRange" | "size" | "turnRate" | "insulation";
 
 export const TRAITS: readonly TraitSpec[] = [
   { key: "maxSpeed", label: "Max speed", min: 0.5, max: 4, unit: "px/tick" },
   { key: "sensorRange", label: "Sensor range", min: 50, max: 400, unit: "px" },
   { key: "size", label: "Size", min: 0.5, max: 2, unit: "×" },
   { key: "turnRate", label: "Turn rate", min: 0.05, max: 0.4, unit: "rad/tick" },
+  // Fur / fat. Only matters (and only costs) when temperature is on.
+  { key: "insulation", label: "Insulation", min: 0, max: 1, unit: "" },
 ];
 
 /** A creature's physical makeup plus the per-tick consequences derived from it. */
@@ -29,6 +31,8 @@ export interface Body {
   sensorRange: number;
   size: number;
   turnRate: number;
+  /** Fur / fat, 0..1: keeps heat in (good in cold, bad in heat). */
+  insulation: number;
   /** Energy burned per tick just for having this body. */
   basal: number;
   eatRadius: number;
@@ -52,6 +56,7 @@ export function defaultBody(cfg: SimConfig): Body {
     sensorRange: cfg.sensorRange,
     size: 1,
     turnRate: cfg.maxTurnRate,
+    insulation: DEFAULT_INSULATION,
     basal: cfg.basalCost,
     eatRadius: cfg.eatRadius,
     effTurn: cfg.maxTurnRate,
@@ -61,9 +66,21 @@ export function defaultBody(cfg: SimConfig): Body {
   };
 }
 
+/**
+ * Starting insulation: a thin coat. Not 0, because a sigmoid gene sitting at the
+ * very bottom of its range would barely respond to mutation.
+ */
+export const DEFAULT_INSULATION = 0.1;
+
 /** Trait value the default body has, for each trait. */
-function defaultTraitValue(key: TraitKey, cfg: SimConfig): number {
-  return key === "size" ? 1 : key === "maxSpeed" ? cfg.maxSpeed : key === "sensorRange" ? cfg.sensorRange : cfg.maxTurnRate;
+export function defaultTraitValue(key: TraitKey, cfg: SimConfig): number {
+  switch (key) {
+    case "size": return 1;
+    case "maxSpeed": return cfg.maxSpeed;
+    case "sensorRange": return cfg.sensorRange;
+    case "turnRate": return cfg.maxTurnRate;
+    case "insulation": return DEFAULT_INSULATION;
+  }
 }
 
 export function traitFromGene(spec: { min: number; max: number }, gene: number): number {
@@ -83,6 +100,8 @@ export function geneForTrait(spec: { min: number; max: number }, value: number):
  */
 export function bodyFromGenes(genes: Float32Array, cfg: SimConfig): Body {
   const [maxSpeed, sensorRange, size, turnRate] = TRAITS.map((t, i) => traitFromGene(t, genes[i]));
+  // Older genomes (saved before insulation existed) have 4 body genes.
+  const insulation = genes.length > 4 ? traitFromGene(TRAITS[4], genes[4]) : DEFAULT_INSULATION;
   const mass = size * size;
   // Kleiber's law: metabolic rate grows with mass^0.75, so big bodies are cheaper per unit mass.
   const metabolic = cfg.sizeScaling ? mass ** 0.75 : mass;
@@ -92,12 +111,15 @@ export function bodyFromGenes(genes: Float32Array, cfg: SimConfig): Body {
     // Top speed needs muscle, which costs energy to maintain whether used or not.
     // Power to overcome drag grows with speed cubed, and muscle mass with power.
     cfg.costSpeed * (maxSpeed / cfg.maxSpeed) ** 3 +
-    cfg.costTurn * (turnRate / cfg.maxTurnRate);
+    cfg.costTurn * (turnRate / cfg.maxTurnRate) +
+    // Growing and carrying fur/fat costs energy, but only matters with temperature.
+    (cfg.temperature ? cfg.costInsulation * insulation : 0);
   return {
     maxSpeed,
     sensorRange,
     size,
     turnRate,
+    insulation,
     basal,
     eatRadius: cfg.eatRadius * size,
     effTurn: turnRate / size,

@@ -1,16 +1,17 @@
 import {
-  BODIES_PRESET, DEFAULT_CONFIG, NATURAL_PRESET, REALISM_PRESET, type SimConfig,
+  BODIES_PRESET, DEFAULT_CONFIG, GEOGRAPHY_PRESET, NATURAL_PRESET, REALISM_PRESET, type SimConfig,
 } from "../sim/config";
 import type { GenerationStats } from "../analysis/metrics";
-import type { LabScore, NaturalStats } from "../evo/natural";
+import type { LabScore, NaturalStats, RegionSummary, SpeciesSummary } from "../evo/natural";
 import { historyToCSV } from "../analysis/history";
 import type { FromWorker, SceneKind, ToWorker } from "../worker/protocol";
-import { Renderer, traitColor, type ColorMode, type ColorRange } from "./renderer";
+import { Renderer, speciesColor, traitColor, type ColorMode, type ColorRange } from "./renderer";
 import { BrainView } from "./brainView";
 import { LineChart, X_GENERATION, X_TICK, type Row } from "./chart";
 import { SettingsForm, type Preset } from "./settings";
 import { renderInspector } from "./inspector";
 import { seasonFactor, seasonInfo } from "../sim/seasons";
+import { BIOMES } from "../sim/biomes";
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 
@@ -19,7 +20,8 @@ const SERIES_1 = "#3987e5";
 const SERIES_2 = "#d95926";
 
 const PRESETS: Preset[] = [
-  { name: "Natural (default)", config: { ...DEFAULT_CONFIG, ...NATURAL_PRESET } },
+  { name: "Big world: geography, temperature (default)", config: { ...DEFAULT_CONFIG, ...GEOGRAPHY_PRESET } },
+  { name: "Small world: natural", config: { ...DEFAULT_CONFIG, ...NATURAL_PRESET } },
   { name: "Lab: bodies + realism", config: { ...DEFAULT_CONFIG, ...REALISM_PRESET } },
   { name: "Lab: bodies only", config: { ...DEFAULT_CONFIG, ...BODIES_PRESET } },
   { name: "Lab: classic (Phase 3)", config: { ...DEFAULT_CONFIG } },
@@ -39,9 +41,10 @@ let fastGoal: number | null = null;
 let running = true;
 let stepOnce = 0;
 let pending = false;
-let lastFrame: Extract<FromWorker, { t: "frame" }> | null = null;
 let chartsDirty = true;
 let colorMode: ColorMode = "energy";
+let latestSpecies: SpeciesSummary[] = [];
+let latestRegions: RegionSummary[] = [];
 const natural = () => config.mode === "natural";
 
 // ---------- worker ----------
@@ -159,6 +162,12 @@ const natCharts = [
     series: [{ key: "diversity", label: "Diversity", color: SERIES_1 }],
     format: fmt1,
   }),
+  new LineChart($("c-species"), {
+    title: "Species alive",
+    subtitle: "genetic clusters; starts high (100 unrelated founders) then collapses",
+    series: [{ key: "speciesAlive", label: "Species", color: SERIES_1 }],
+    format: (v) => v.toFixed(0),
+  }),
   new LineChart($("c-cluster"), {
     title: "Food clustering",
     subtitle: "1 = random scatter, lower = patchier",
@@ -214,6 +223,13 @@ const bodyCharts = [
     format: (v) => v.toFixed(2),
     yRange: [0.5, 2],
   }),
+  new LineChart($("c-insul"), {
+    title: "Insulation",
+    subtitle: "fur / fat, 0–1 (matters with temperature)",
+    series: [{ key: "insulationMean", sdKey: "insulationSd", label: "Insulation", color: SERIES_1 }],
+    format: (v) => v.toFixed(2),
+    yRange: [0, 1],
+  }),
   new LineChart($("c-turn"), {
     title: "Turn rate",
     subtitle: "degrees/tick",
@@ -223,8 +239,48 @@ const bodyCharts = [
     yRange: [0.05 * deg, 0.4 * deg],
   }),
 ];
-const allCharts = [...labCharts, labScoreChart, ...natCharts, ...lifeCharts, ...bodyCharts];
-for (const c of [labScoreChart, ...natCharts, ...lifeCharts]) c.setXAxis(X_TICK);
+const biomeSeries = (prefix: string) => BIOMES.map((b, k) => ({ key: `${prefix}${k}`, label: b.name, color: b.color }));
+const biomeCharts = [
+  new LineChart($("c-bpop"), {
+    title: "Population by biome",
+    subtitle: "creatures in each biome",
+    series: biomeSeries("pop_"),
+    format: (v) => v.toFixed(0),
+  }),
+  new LineChart($("c-fst"), {
+    title: "Genetic separation",
+    subtitle: "between regions; 0 = one mixed gene pool",
+    series: [{ key: "geneticSeparation", label: "Separation", color: SERIES_1 }],
+    format: (v) => v.toFixed(2),
+    yRange: [0, 0.3],
+  }),
+  new LineChart($("c-bsize"), {
+    title: "Size by biome",
+    subtitle: "mean body size of creatures there",
+    series: biomeSeries("size_"),
+    format: (v) => v.toFixed(2),
+  }),
+  new LineChart($("c-bspeed"), {
+    title: "Max speed by biome",
+    subtitle: "px/tick",
+    series: biomeSeries("speed_"),
+    format: (v) => v.toFixed(1),
+  }),
+  new LineChart($("c-binsul"), {
+    title: "Insulation by biome",
+    subtitle: "the clearest place to watch tundra vs desert split",
+    series: biomeSeries("insul_"),
+    format: (v) => v.toFixed(2),
+  }),
+  new LineChart($("c-bsensor"), {
+    title: "Sensor range by biome",
+    subtitle: "px",
+    series: biomeSeries("sensor_"),
+    format: (v) => v.toFixed(0),
+  }),
+];
+const allCharts = [...labCharts, labScoreChart, ...natCharts, ...lifeCharts, ...bodyCharts, ...biomeCharts];
+for (const c of [labScoreChart, ...natCharts, ...lifeCharts, ...biomeCharts]) c.setXAxis(X_TICK);
 
 const settings = new SettingsForm(
   $<HTMLFormElement>("settings"),
@@ -245,6 +301,7 @@ interface ViewEls {
   legend: HTMLSpanElement;
   meta: HTMLSpanElement;
   overlay: HTMLDivElement;
+  followBtn: HTMLButtonElement;
   renderer: Renderer;
 }
 let views: ViewEls[] = [];
@@ -263,7 +320,20 @@ function ensureViews(n: number): void {
     meta.className = "meta";
     const legend = document.createElement("span");
     legend.className = "legend";
-    head.append(label, legend, meta);
+    const tools = document.createElement("span");
+    tools.className = "view-tools";
+    const mkBtn = (text: string, title: string) => {
+      const b = document.createElement("button");
+      b.className = "mini";
+      b.textContent = text;
+      b.title = title;
+      tools.append(b);
+      return b;
+    };
+    const followBtn = mkBtn("Follow", "Keep the selected creature centred (zooms in)");
+    const fitBtn = mkBtn("Fit", "Show the whole world (or double-click the map)");
+    const fullBtn = mkBtn("Fullscreen", "Show this view fullscreen (Esc to leave)");
+    head.append(label, legend, meta, tools);
     const wrap = document.createElement("div");
     wrap.className = "view-canvas-wrap";
     const canvas = document.createElement("canvas");
@@ -274,13 +344,26 @@ function ensureViews(n: number): void {
     root.append(head, wrap);
     stage.append(root);
     const renderer = new Renderer(canvas);
-    canvas.addEventListener("click", (ev) => {
-      const snap = lastFrame?.views[k];
-      if (!snap) return;
+    renderer.onPick = (id) => {
       followNote.hidden = true;
-      send({ t: "select", view: k, id: renderer.pick(snap, ev) });
+      send({ t: "select", view: k, id });
+    };
+    renderer.onManualMove = () => followBtn.classList.remove("toggled");
+    followBtn.addEventListener("click", () => {
+      renderer.follow = !renderer.follow;
+      followBtn.classList.toggle("toggled", renderer.follow);
+      if (!renderer.follow) renderer.resetView();
     });
-    return { root, label, legend, meta, overlay, renderer };
+    fitBtn.addEventListener("click", () => {
+      renderer.follow = false;
+      followBtn.classList.remove("toggled");
+      renderer.resetView();
+    });
+    fullBtn.addEventListener("click", () => {
+      if (document.fullscreenElement === root) void document.exitFullscreen();
+      else void root.requestFullscreen?.();
+    });
+    return { root, label, legend, meta, overlay, followBtn, renderer };
   });
 }
 
@@ -297,7 +380,15 @@ function drawFrame(f: Extract<FromWorker, { t: "frame" }>): void {
       const a = config.seasonAmplitude || 1;
       ground = 0.3 + 0.7 * ((seasonFactor(config, f.tick) - (1 - a)) / (2 * a));
     }
-    const range = v.renderer.draw(snap, sel ? sel.id : null, sel ? sel.sense : null, sel?.body.sensorRange, colorMode, ground);
+    v.renderer.rememberTerrain(snap.terrain);
+    v.followBtn.disabled = !sel;
+    const range = v.renderer.draw(snap, {
+      selectedId: sel ? sel.id : null,
+      sense: sel ? sel.sense : null,
+      sensorRange: sel?.body.sensorRange,
+      colorMode,
+      groundStrength: ground,
+    });
     renderLegend(v.legend, range);
     if (f.scene === "evolve") {
       const season = f.mode === "natural" ? seasonInfo(config, f.tick) : null;
@@ -331,9 +422,11 @@ function drawFrame(f: Extract<FromWorker, { t: "frame" }>): void {
 
 const LEGEND_LABEL: Record<ColorMode, [string, (v: number) => string]> = {
   energy: ["Energy", (v) => v.toFixed(0)],
+  species: ["Species", (v) => v.toFixed(0)],
   size: ["Size", (v) => `${v.toFixed(2)}×`],
   speed: ["Max speed", (v) => v.toFixed(1)],
   sensor: ["Sensor", (v) => `${v.toFixed(0)}px`],
+  insulation: ["Insulation", (v) => v.toFixed(2)],
   age: ["Age", (v) => v.toFixed(0)],
 };
 
@@ -345,6 +438,11 @@ function renderLegend(el: HTMLSpanElement, range: ColorRange | null): void {
   if (colorMode === "energy") {
     bar.style.background = "linear-gradient(90deg, hsl(0,80%,45%), hsl(95,80%,52%), hsl(190,80%,60%))";
     el.append(document.createTextNode("starving"), bar, document.createTextNode("full"));
+    return;
+  }
+  if (colorMode === "species") {
+    const alive = latestSpecies.filter((s) => s.extinct === null).length;
+    el.append(document.createTextNode(natural() ? `one colour per species · ${alive} alive` : "species: natural mode only"));
     return;
   }
   if (!range) return;
@@ -363,17 +461,133 @@ function renderSeason(f: Extract<FromWorker, { t: "frame" }>): void {
   $("season-fill").style.width = `${(info.phase * 100).toFixed(1)}%`;
 }
 
+/** Species family tree: living species, their ancestors, and recently extinct branches. */
+function renderSpecies(list: SpeciesSummary[]): void {
+  const host = $("species-tree");
+  host.replaceChildren();
+  const alive = list.filter((s) => s.extinct === null);
+  $("species-count").textContent = list.length ? `· ${alive.length} alive, ${list.length - alive.length} recently extinct` : "";
+  if (!list.length) {
+    const p = document.createElement("p");
+    p.className = "muted";
+    p.textContent = "Species appear after the first stats sample.";
+    host.append(p);
+    return;
+  }
+  // Keep it readable: living species, their ancestors, and recent extinctions that got anywhere.
+  const byId = new Map(list.map((s) => [s.id, s]));
+  const keep = new Set<number>();
+  for (const s of alive) {
+    let cur: SpeciesSummary | undefined = s;
+    while (cur && !keep.has(cur.id)) {
+      keep.add(cur.id);
+      cur = cur.parent !== null ? byId.get(cur.parent) : undefined;
+    }
+  }
+  for (const s of list) if (s.extinct !== null && progress - s.extinct < 10_000 && s.peak >= 5) keep.add(s.id);
+  const shown = list.filter((s) => keep.has(s.id));
+  const byParent = new Map<number | null, SpeciesSummary[]>();
+  const ids = new Set(shown.map((s) => s.id));
+  for (const s of shown) {
+    const parent = s.parent !== null && ids.has(s.parent) ? s.parent : null;
+    if (!byParent.has(parent)) byParent.set(parent, []);
+    byParent.get(parent)!.push(s);
+  }
+  const regionName = (r: number | null) => (r === null ? "" : `${BIOMES[latestRegions[r]?.biome ?? 0]?.name ?? ""} #${r + 1}`);
+  const row = (s: SpeciesSummary, depth: number) => {
+    const el = document.createElement("div");
+    el.className = "sp-row" + (s.extinct !== null ? " extinct" : "");
+    el.style.paddingLeft = `${depth * 14}px`;
+    const sw = document.createElement("i");
+    sw.className = "sw";
+    sw.style.background = s.extinct !== null ? "transparent" : speciesColor(s.id);
+    sw.style.border = `1px solid ${speciesColor(s.id)}`;
+    const name = document.createElement("span");
+    name.textContent = `${depth ? "└ " : ""}S${s.id}`;
+    const meta = document.createElement("span");
+    meta.className = "sp-meta";
+    meta.textContent = s.extinct !== null
+      ? `extinct at ${fmtTicks(s.extinct)} · peak ${s.peak}`
+      : `${s.size} alive · since ${fmtTicks(s.born)}${s.mainRegion !== null ? ` · ${regionName(s.mainRegion)}` : ""}`;
+    el.append(sw, name, meta);
+    host.append(el);
+  };
+  // Living species first within each level, then by size.
+  const order = (a: SpeciesSummary, b: SpeciesSummary) =>
+    Number(a.extinct !== null) - Number(b.extinct !== null) || b.size - a.size || b.peak - a.peak;
+  const walk = (parent: number | null, depth: number) => {
+    for (const s of (byParent.get(parent) ?? []).sort(order)) {
+      row(s, depth);
+      walk(s.id, depth + 1);
+    }
+  };
+  walk(null, 0);
+}
+
+/** Regions table; clicking a row zooms the live world view there. */
+function renderRegions(list: RegionSummary[]): void {
+  const table = $("regions-table") as HTMLTableElement;
+  table.replaceChildren();
+  const head = table.createTHead().insertRow();
+  for (const h of ["Region", "Temp.", "Pop.", "Species", "Main species", "Size", "Speed", "Sensor", "Insulation", "Gen. distance"]) {
+    const th = document.createElement("th");
+    th.textContent = h;
+    head.append(th);
+  }
+  const body = table.createTBody();
+  for (const r of list) {
+    const tr = body.insertRow();
+    const cell = (text: string, swatch?: string) => {
+      const td = tr.insertCell();
+      if (swatch) {
+        const i = document.createElement("i");
+        i.className = "sw";
+        i.style.background = swatch;
+        td.append(i);
+      }
+      td.append(document.createTextNode(text));
+    };
+    const empty = r.population === 0;
+    cell(`${BIOMES[r.biome].name} #${r.region + 1}`, BIOMES[r.biome].color);
+    cell(r.temp === 0 ? "0" : (r.temp > 0 ? "+" : "") + r.temp.toFixed(1));
+    cell(String(r.population));
+    cell(empty ? "–" : String(r.species));
+    if (r.dominantSpecies !== null) cell(`S${r.dominantSpecies} · ${(r.dominantShare * 100).toFixed(0)}%`, speciesColor(r.dominantSpecies));
+    else cell("–");
+    cell(empty ? "–" : r.size.toFixed(2));
+    cell(empty ? "–" : r.speed.toFixed(2));
+    cell(empty ? "–" : r.sensor.toFixed(0));
+    cell(empty ? "–" : r.insulation.toFixed(2));
+    cell(empty ? "–" : r.distance.toFixed(3));
+    tr.title = "Zoom the map to this region";
+    tr.addEventListener("click", () => {
+      const v = views[0];
+      if (!v || scene !== "evolve") return;
+      v.renderer.focusOn(r.x, r.y);
+      v.followBtn.classList.remove("toggled");
+    });
+  }
+}
+
 /** Show the chart sections and labels that fit the current mode. */
 function applyMode(): void {
   const nat = natural();
   $("lab-charts").hidden = nat;
   $("nat-charts").hidden = !nat;
   $("life-section").hidden = !nat;
+  $("biome-section").hidden = !(nat && config.biomes);
+  $("eco-row").hidden = !nat;
+  $("regions-panel").hidden = !config.biomes;
+  $("eco-row").classList.toggle("single", !config.biomes);
+  latestSpecies = [];
+  latestRegions = [];
+  renderSpecies([]);
+  renderRegions([]);
   $("body-section").hidden = !config.evolveBodies;
   for (const c of bodyCharts) c.setXAxis(nat ? X_TICK : X_GENERATION);
   // Shade the lean half of each year on natural-mode time charts.
   const shade = nat && config.seasonLength > 0 ? "lean" : null;
-  for (const c of [...natCharts, ...lifeCharts, ...bodyCharts]) c.setShade(shade);
+  for (const c of [...natCharts, ...lifeCharts, ...bodyCharts, ...biomeCharts]) c.setShade(shade);
   $("food-ctl").hidden = !nat;
   foodSel.value = "1";
   for (const c of [...natCharts, ...lifeCharts, labScoreChart]) c.setEmptyText("Waiting for the first sample…");
@@ -436,7 +650,21 @@ function updateStatus(): void {
 /** Natural samples, with births/deaths converted to per-1,000-tick rates. */
 function toNatRows(stats: NaturalStats[]): Row[] {
   const k = 1000 / config.sampleEvery;
-  return stats.map((s) => ({ ...(s as unknown as Row), birthsK: s.births * k, deathsK: s.deaths * k }));
+  return stats.map((s) => {
+    const row: Row = {};
+    for (const [key, v] of Object.entries(s)) if (typeof v === "number") row[key] = v;
+    row.birthsK = s.births * k;
+    row.deathsK = s.deaths * k;
+    // Per-biome arrays become flat keys for the charts (empty biome = gap-free 0 for pop, carry for traits).
+    s.biomePop?.forEach((v, b) => {
+      row[`pop_${b}`] = v;
+      row[`size_${b}`] = v ? s.biomeSize[b] : NaN;
+      row[`speed_${b}`] = v ? s.biomeSpeed[b] : NaN;
+      row[`sensor_${b}`] = v ? s.biomeSensor[b] : NaN;
+      row[`insul_${b}`] = v ? s.biomeInsulation[b] : NaN;
+    });
+    return row;
+  });
 }
 
 function toLabRows(scores: LabScore[]): Row[] {
@@ -468,7 +696,7 @@ worker.onmessage = (ev: MessageEvent<FromWorker>) => {
   switch (m.t) {
     case "frame":
       pending = false;
-      lastFrame = m;
+
       progress = m.generation;
       drawFrame(m);
       if (natural()) updateTiles();
@@ -507,6 +735,12 @@ worker.onmessage = (ev: MessageEvent<FromWorker>) => {
       }
       natRows.push(...toNatRows(m.stats));
       labRows.push(...toLabRows(m.labScores));
+      if (m.stats.length) {
+        latestRegions = m.regions;
+        latestSpecies = m.species;
+        renderRegions(m.regions);
+        renderSpecies(m.species);
+      }
       chartsDirty = true;
       updateTiles();
       updateStatus();
@@ -558,7 +792,7 @@ function loop(): void {
   if (chartsDirty) {
     const hist = history as unknown as Row[];
     for (const c of labCharts) c.setData(hist);
-    for (const c of [...natCharts, ...lifeCharts]) c.setData(natRows);
+    for (const c of [...natCharts, ...lifeCharts, ...biomeCharts]) c.setData(natRows);
     labScoreChart.setData(labRows);
     for (const c of bodyCharts) c.setData(natural() ? natRows : hist);
     chartsDirty = false;

@@ -51,6 +51,42 @@ export class TorusGrid {
     this.cellOf[item] = ci;
   }
 
+  /** Empty the grid (keeps allocations). */
+  clear(): void {
+    for (const cell of this.cells) cell.length = 0;
+    this.cellOf.length = 0;
+  }
+
+  /** Number of items within r of (x, y), not counting `exclude`. */
+  countWithin(x: number, y: number, r: number, exclude = -1): number {
+    const { cols, rows, cells, px, py, width: W, height: H } = this;
+    const rc = Math.min(Math.ceil(r / this.cellW), cols >> 1);
+    const rr = Math.min(Math.ceil(r / this.cellH), rows >> 1);
+    const c0 = Math.min(cols - 1, Math.floor(x / this.cellW));
+    const r0 = Math.min(rows - 1, Math.floor(y / this.cellH));
+    const halfW = W / 2, halfH = H / 2, r2 = r * r;
+    let n = 0;
+    for (let dr = -rr; dr <= rr; dr++) {
+      let row = (r0 + dr) % rows;
+      if (row < 0) row += rows;
+      for (let dc = -rc; dc <= rc; dc++) {
+        let col = (c0 + dc) % cols;
+        if (col < 0) col += cols;
+        const cell = cells[row * cols + col];
+        for (let k = 0; k < cell.length; k++) {
+          const i = cell[k];
+          if (i === exclude) continue;
+          let dx = px[i] - x;
+          if (dx > halfW) dx -= W; else if (dx < -halfW) dx += W;
+          let dy = py[i] - y;
+          if (dy > halfH) dy -= H; else if (dy < -halfH) dy += H;
+          if (dx * dx + dy * dy <= r2) n++;
+        }
+      }
+    }
+    return n;
+  }
+
   remove(item: number): void {
     const ci = this.cellOf[item];
     if (ci === undefined || ci < 0) return;

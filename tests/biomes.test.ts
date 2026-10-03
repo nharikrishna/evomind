@@ -29,9 +29,9 @@ describe("biome map", () => {
     expect(cover.reduce((s, c) => s + c, 0)).toBeCloseTo(1);
   });
 
-  it("adds 4 one-hot biome inputs when biomeSense is on", () => {
-    expect(preySensorCount(makeConfig({ biomeSense: true }))).toBe(8);
-    expect(preySensorLabels(makeConfig({ biomeSense: true, senseSpeed: true }))).toHaveLength(9);
+  it("adds one one-hot input per biome when biomeSense is on", () => {
+    expect(preySensorCount(makeConfig({ biomeSense: true }))).toBe(4 + BIOMES.length);
+    expect(preySensorLabels(makeConfig({ biomeSense: true, senseSpeed: true }))).toHaveLength(5 + BIOMES.length);
   });
 });
 
@@ -49,9 +49,9 @@ describe("biome effects", () => {
     return w.creatures[0].energySpent;
   }
 
-  it("tundra adds heat-loss upkeep proportional to size; swamp makes moving dearer", () => {
+  it("swamp makes moving dearer (no temperature: tundra costs nothing extra)", () => {
     const grass = costIn(2);
-    expect(costIn(TUNDRA) - grass).toBeCloseTo(cfg.coldCost * 1, 6);
+    expect(costIn(TUNDRA) - grass).toBeCloseTo(0, 6);
     const move = cfg.moveCost * cfg.maxSpeed ** 2;
     expect(costIn(SWAMP) - grass).toBeCloseTo(move * (cfg.mudFactor - 1), 6);
   });

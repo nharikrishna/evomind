@@ -43,8 +43,22 @@ export interface SimConfig {
   biomeRegions: number;
   /** Brains get 4 inputs saying which biome they're in. */
   biomeSense: boolean;
-  /** Tundra: extra upkeep per tick per unit of body size (heat lost through the surface). */
-  coldCost: number;
+  /**
+   * Temperature and heat budget (Phase 6c step 2). Needs biomes. Cold costs heat lost
+   * through the body surface; heat costs shedding metabolic and movement heat.
+   */
+  temperature: boolean;
+  /** Energy per tick per unit of temperature mismatch for a size-1, uninsulated body at rest. */
+  thermalCost: number;
+  /** Upkeep per tick of full insulation (fur/fat). */
+  costInsulation: number;
+  /** How much warmer summer is and colder winter is (added to biome temperature). */
+  seasonTempSwing: number;
+  /**
+   * Thermoneutral zone half-width: within ±this of the ideal temperature a body spends
+   * nothing extra on staying warm or cool (as real animals do); costs start outside it.
+   */
+  thermalComfort: number;
   /** Swamp: movement cost multiplier. */
   mudFactor: number;
   /** Forest: sensor range multiplier. */
@@ -54,6 +68,40 @@ export interface SimConfig {
    * (1 = free movement, 0 = impassable walls). Models barriers like rivers or ridges.
    */
   biomeCrossing: number;
+
+  // Geography (Phase 6c step 1)
+  /** Borders between regions become rivers or mountain ridges. */
+  barriers: boolean;
+  /** Fraction of borders that are rivers (the rest are mountains). */
+  riverShare: number;
+  /** Chance an attempt to step into a river succeeds (otherwise the creature turns back). */
+  riverCrossing: number;
+  /** Movement cost multiplier while on a mountain ridge. */
+  mountainCost: number;
+  /** Chance per tick of a storm carrying a small group to another region (rafting founders). */
+  founderRate: number;
+  /** Size of a storm-carried founder group. */
+  founderGroup: number;
+  /** Species threshold: RMS per-gene distance from a species' representative. */
+  speciesThreshold: number;
+
+  // Population brakes (Phase 6c, before temperature tuning)
+  /** Density dependence: crowded creatures get stressed and breed less. */
+  crowding: boolean;
+  /** Neighbour-counting radius (px). */
+  crowdRadius: number;
+  /** Neighbours tolerated without stress; breeding is half as likely at this many. */
+  crowdTolerance: number;
+  /** Extra upkeep per tick per neighbour beyond the tolerance. */
+  crowdStress: number;
+  /** Plants hold biomass: grazed down bite by bite, regrow logistically from what's left. */
+  plantBiomass: boolean;
+  /** Logistic regrowth rate per tick (scaled by fertility, biome, season, food boost). */
+  plantGrowth: number;
+  /** Energy taken per tick of grazing. */
+  biteSize: number;
+  /** A new sprout starts at this fraction of full size. */
+  seedling: number;
 
   // Creature body
   maxEnergy: number;
@@ -160,10 +208,38 @@ export const DEFAULT_CONFIG: SimConfig = {
   biomes: false,
   biomeRegions: 8,
   biomeSense: false,
-  coldCost: 0.03,
+  temperature: false,
+  // Rule of thumb, fixed (not tuned to outcomes): at the extreme (|temp| = 1) a size-1,
+  // uninsulated body at rest pays as much again as its normal living cost (basalCost 0.05).
+  thermalCost: 0.05,
+  costInsulation: 0.01,
+  seasonTempSwing: 0.3,
+  thermalComfort: 0.3,
   mudFactor: 2.5,
   fogFactor: 0.5,
   biomeCrossing: 1,
+
+  barriers: false,
+  riverShare: 0.5,
+  riverCrossing: 0.03,
+  mountainCost: 8,
+  founderRate: 0.00015,
+  founderGroup: 6,
+  speciesThreshold: 0.4,
+
+  // Set from reasoning, not tuned to outcomes: crowding counted within ~3 body lengths;
+  // each neighbour past the tolerance costs 4% of normal living cost (basalCost 0.05).
+  crowding: false,
+  crowdRadius: 40,
+  crowdTolerance: 6,
+  crowdStress: 0.002,
+  // A full plant (foodEnergy 40) takes 4 bites. r is chosen so peak sustained yield matches the
+  // random-respawn model (≈ foodEnergy × respawnRate = 0.4/tick per plant): r·K·g/4 ≈ 0.4 with
+  // average local growth g ≈ 0.8. (r = 0.01 starved the world: ~5-8x less food.)
+  plantBiomass: false,
+  plantGrowth: 0.05,
+  biteSize: 10,
+  seedling: 0.25,
 
   maxEnergy: 100,
   initialEnergy: 60,
@@ -246,4 +322,30 @@ export const NATURAL_PRESET: Partial<SimConfig> = {
   respawnRate: 0.01,
   // Pure safety net: efficiency keeps evolving, and a 300k-tick run crept up to ~540.
   maxPopulation: 1000,
+};
+
+/**
+ * Natural mode in a bigger world (4x the area, same food density) with biome
+ * regions separated by rivers and mountain ridges, plus occasional
+ * storm-carried founders. Tuned on 3 seeds: genetic separation between regions
+ * 0.09 without barriers -> 0.24 with these barriers; populations ~370-460.
+ * (2.5x food was too sparse: populations of 13-330 with extinctions.)
+ */
+export const GEOGRAPHY_PRESET: Partial<SimConfig> = {
+  ...NATURAL_PRESET,
+  width: 1600,
+  height: 1200,
+  foodCount: 240,
+  creatureCount: 300,
+  maxPopulation: 2000,
+  biomes: true,
+  biomeRegions: 5,
+  biomeSense: true,
+  temperature: true,
+  mudFactor: 1.8,
+  barriers: true,
+  riverCrossing: 0.005,
+  mountainCost: 20,
+  // Population brake: without it, boom-and-bust crashes caused 9-10 extinctions per 100k ticks.
+  crowding: true,
 };

@@ -57,9 +57,11 @@
         <label class="inline" title="Colour creatures by energy (red = starving, cyan = full), or by a trait (dim = low, bright = high)">Colour
           <select id="color">
             <option value="energy">Energy</option>
+            <option value="species">Species</option>
             <option value="size">Size</option>
             <option value="speed">Max speed</option>
             <option value="sensor">Sensor range</option>
+            <option value="insulation">Insulation</option>
             <option value="age">Age</option>
           </select>
         </label>
@@ -115,6 +117,19 @@
           </aside>
         </div>
 
+        <div id="eco-row" class="eco-row">
+          <div class="panel" id="species-panel">
+            <h2>Species <span class="muted-inline" id="species-count"></span></h2>
+            <p class="hint top">Genetic clusters. A species splits off when part of it drifts too far from the rest. Colours match <b>Colour → Species</b>.</p>
+            <div id="species-tree" class="species-tree"></div>
+          </div>
+          <div class="panel" id="regions-panel">
+            <h2>Regions</h2>
+            <p class="hint top">Click a row to zoom the map there.</p>
+            <div class="table-wrap"><table id="regions-table" class="data-table"></table></div>
+          </div>
+        </div>
+
         <div id="lab-charts" class="charts">
           <div id="c-fitness"></div>
           <div id="c-align"></div>
@@ -132,7 +147,20 @@
           <div id="c-cluster"></div>
           <div id="c-foodmap"></div>
           <div id="c-ndiv"></div>
+          <div id="c-species"></div>
         </div>
+
+        <section id="biome-section" class="body-section">
+          <div class="section-title">Biomes &amp; geography <span class="muted-inline">· colours match the biome tints on the map</span></div>
+          <div class="charts three">
+            <div id="c-bpop"></div>
+            <div id="c-fst"></div>
+            <div id="c-bsize"></div>
+            <div id="c-binsul"></div>
+            <div id="c-bspeed"></div>
+            <div id="c-bsensor"></div>
+          </div>
+        </section>
 
         <section id="life-section" class="body-section">
           <div class="section-title">Life history <span class="muted-inline">· when to breed, and how much to give each child (r/K strategy)</span></div>
@@ -144,11 +172,12 @@
 
         <section id="body-section" class="body-section">
           <div class="section-title">Body evolution <span class="muted-inline">· line = population average, band = spread (±1 sd)</span></div>
-          <div class="charts four">
+          <div class="charts three">
             <div id="c-speed"></div>
             <div id="c-sensor"></div>
             <div id="c-size"></div>
             <div id="c-turn"></div>
+            <div id="c-insul"></div>
           </div>
         </section>
       </main>

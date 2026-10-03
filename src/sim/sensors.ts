@@ -11,11 +11,11 @@ export const PREY_SENSORS = ["foodSin", "foodCos", "foodNear", "energy", "speed"
 
 /**
  * Inputs a prey brain gets: the first four always; own speed with `senseSpeed`;
- * four one-hot biome inputs with `biomeSense` (present even where the world has
- * no biome map, which then reads as grassland, so brains stay compatible).
+ * one-hot biome inputs with `biomeSense` (present even where the world has no
+ * biome map, which then reads as grassland, so brains stay compatible).
  */
 export function preySensorCount(cfg: SimConfig): number {
-  return 4 + (cfg.senseSpeed ? 1 : 0) + (cfg.biomeSense ? 4 : 0);
+  return 4 + (cfg.senseSpeed ? 1 : 0) + (cfg.biomeSense ? BIOMES.length : 0);
 }
 
 /** Human-readable input names, in order (for the brain view). */

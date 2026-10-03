@@ -16,9 +16,10 @@ import { randomPopulation } from "../brain/population";
 import { Evolution, runToEnd, type LineageEntry, type RunFile } from "../evo/generation";
 import { NaturalEvolution, type NaturalRunFile } from "../evo/natural";
 import { genomeFromJSON } from "../analysis/history";
+import { BIOME_CELL, BIOMES } from "../sim/biomes";
 import {
-  CREATURE_STRIDE, C_AGE, C_ALIVE, C_ENERGY, C_HEADING, C_ID, C_MAXSPEED, C_RELATIVE, C_SENSOR, C_SIZE, C_X, C_Y,
-  type FromWorker, type SceneKind, type SelectedSnap, type ToWorker, type WorldSnap,
+  CREATURE_STRIDE, C_AGE, C_ALIVE, C_ENERGY, C_HEADING, C_ID, C_INSULATION, C_MAXSPEED, C_RELATIVE, C_SENSOR, C_SIZE, C_SPECIES, C_X, C_Y,
+  type FromWorker, type SceneKind, type SelectedSnap, type Terrain, type ToWorker, type WorldSnap,
 } from "./protocol";
 
 declare const self: DedicatedWorkerGlobalScope;
@@ -54,6 +55,29 @@ let fastTarget: number | null = null;
 let replay: { genome: Genome; config: SimConfig; label: string } | null = null;
 let sentStats = 0;
 let sentLab = 0;
+/** Biome maps get an id; each is sent to the UI once. */
+const mapIds = new WeakMap<World, number>();
+let nextMapId = 1;
+const sentMaps = new Set<number>();
+
+function terrainFor(w: World): { mapId: number | null; terrain: Terrain | null } {
+  const m = w.biomeMap;
+  if (!m) return { mapId: null, terrain: null };
+  let id = mapIds.get(w);
+  if (id === undefined) {
+    id = nextMapId++;
+    mapIds.set(w, id);
+  }
+  if (sentMaps.has(id)) return { mapId: id, terrain: null };
+  sentMaps.add(id);
+  return {
+    mapId: id,
+    terrain: {
+      mapId: id, cols: m.cols, rows: m.rows, cell: BIOME_CELL,
+      biomes: new Uint8Array(m.cells), barriers: new Uint8Array(m.barrierCells), regions: m.regions,
+    },
+  };
+}
 
 const post = (msg: FromWorker, transfer: Transferable[] = []) => self.postMessage(msg, transfer);
 const lineageSrc = (): Lineage => (nat ?? evo)!;
@@ -106,12 +130,15 @@ function finishGeneration(): void {
 /** Send any new natural stats samples / lab scores. */
 function flushNatural(): void {
   if (!nat) return;
+  while (nat.pendingEvents.length) post({ t: "info", message: nat.pendingEvents.shift()! });
   if (nat.stats.length === sentStats && nat.labScores.length === sentLab) return;
   post({
     t: "nstats",
     stats: nat.stats.slice(sentStats),
     labScores: nat.labScores.slice(sentLab),
     labBaseline: nat.labBaseline,
+    regions: nat.regions,
+    species: nat.speciesList,
   });
   sentStats = nat.stats.length;
   sentLab = nat.labScores.length;
@@ -121,8 +148,11 @@ function flushNatural(): void {
 
 /** A config turned into a plain (non-reproducing) test world with the standard lab food supply. */
 function labLike(cfg: SimConfig): SimConfig {
-  const { foodCount, foodEnergy, respawnRate, episodeTicks, foodModel } = DEFAULT_CONFIG;
-  return { ...cfg, mode: "lab", agingScale: 0, seasonLength: 0, biomes: false, foodCount, foodEnergy, respawnRate, episodeTicks, foodModel };
+  const { foodCount, foodEnergy, respawnRate, episodeTicks, foodModel, width, height } = DEFAULT_CONFIG;
+  return {
+    ...cfg, mode: "lab", agingScale: 0, seasonLength: 0, biomes: false, barriers: false,
+    foodCount, foodEnergy, respawnRate, episodeTicks, foodModel, width, height,
+  };
 }
 
 function bestSource(): { genome: Genome; config: SimConfig; label: string } | null {
@@ -274,6 +304,8 @@ function snapWorld(v: View, relativeOf: number | null): WorldSnap {
     creatures[o + C_MAXSPEED] = c.body.maxSpeed;
     creatures[o + C_AGE] = c.age;
     creatures[o + C_SENSOR] = c.body.sensorRange;
+    creatures[o + C_INSULATION] = c.body.insulation;
+    creatures[o + C_SPECIES] = nat && w === nat.world && gid !== null ? (nat.speciesOf(gid) ?? -1) : -1;
     eaten += c.foodEaten;
   }
   const active = w.food.filter((f) => f.active);
@@ -296,6 +328,7 @@ function snapWorld(v: View, relativeOf: number | null): WorldSnap {
     creatures,
     food,
     fertility: w.fertility ? { cols: w.fertility.cols, rows: w.fertility.rows, values: Array.from(w.fertility.values) } : null,
+    ...terrainFor(w),
   };
 }
 
@@ -344,15 +377,20 @@ function snapSelected(): { snap: SelectedSnap | null; relativeOf: number | null 
       ancestry,
       ancestryMore,
       relatives: 0,
+      place: c.biome >= 0 ? BIOMES[c.biome].name : null,
+      species: nat && v.world === nat.world && g ? (nat.speciesOf(g.id) ?? null) : null,
       body: {
         maxSpeed: c.body.maxSpeed,
         sensorRange: c.body.sensorRange,
         size: c.body.size,
         turnRate: c.body.turnRate,
+        insulation: c.body.insulation,
         basal: c.body.basal,
         maxEnergy: c.body.maxEnergy,
         evolved: !!g?.genes.body,
       },
+      thermalSpent: c.thermalSpent,
+      crowding: c.crowding,
       lifeHistory: g?.genes.repro ? decodeRepro(g.genes.repro) : null,
       brain: brain && {
         shape: brain.shape,

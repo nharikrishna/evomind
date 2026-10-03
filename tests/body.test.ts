@@ -36,13 +36,17 @@ describe("body genes", () => {
     expect(b.eatRadius).toBeCloseTo(cfg.eatRadius, 3);
   });
 
-  it("every trait has a price: raising it raises upkeep", () => {
-    const base = bodyFromGenes(defaultGenes(), cfg).basal;
+  it("every trait has a price: raising it raises upkeep (insulation only with temperature)", () => {
+    const warm = makeConfig({ temperature: true });
+    const base = bodyFromGenes(defaultGenes(), warm).basal;
     for (let i = 0; i < TRAITS.length; i++) {
       const g = defaultGenes();
       g[i] += 1;
-      expect(bodyFromGenes(g, cfg).basal).toBeGreaterThan(base);
+      expect(bodyFromGenes(g, warm).basal).toBeGreaterThan(base);
     }
+    const g = defaultGenes();
+    g[TRAITS.findIndex((t) => t.key === "insulation")] += 1;
+    expect(bodyFromGenes(g, cfg).basal).toBeCloseTo(bodyFromGenes(defaultGenes(), cfg).basal, 9);
   });
 
   it("random generation-0 bodies vary around the default", () => {

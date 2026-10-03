@@ -23,6 +23,12 @@ export interface Creature {
   children: number;
   /** Biome the creature was in last tick (-1 = world has no biomes). */
   biome: number;
+  /** Region (map area between barriers) it was in last tick (-1 = no biomes). */
+  region: number;
+  /** Recorded-only: lifetime energy spent on staying warm or cool. */
+  thermalSpent: number;
+  /** Neighbours within crowdRadius last tick (crowding). */
+  crowding: number;
 
   // Recorded-only: these never feed back into behavior; they exist for analysis.
   distanceTraveled: number;
@@ -38,8 +44,11 @@ export interface Food {
   id: number;
   x: number;
   y: number;
+  /** Energy it holds. With plant biomass this is the plant's current size (grazed down, regrows). */
   energy: number;
   active: boolean;
+  /** Local growth multiplier (fertility × biome), set when it sprouts. 1 for random food. */
+  growth: number;
 }
 
 /** What a controller decides each tick. The world clamps both values. */
